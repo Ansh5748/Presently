@@ -852,12 +852,20 @@ app.get('/take', async (req, res) => {
     return res.status(400).send('Error: URL query parameter is required.');
   }
 
+  const isProd = process.env.NODE_ENV === 'production';
   let browser;
   try {
     console.log(`[Screenshot] Launching browser for URL: ${url}`);
     browser = await puppeteer.launch({
       headless: "new",
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
+      ...(isProd && {
+          executablePath: puppeteer.executablePath(),
+        }),
+       args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        ...(isProd ? ['--disable-dev-shm-usage', '--single-process'] : [])
+      ],
     });
 
     const page = await browser.newPage();
