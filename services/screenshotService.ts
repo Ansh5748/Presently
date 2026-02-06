@@ -1,4 +1,4 @@
-const PRIMARY_SERVICE_URL = `${import.meta.env.VITE_SCREENSHOT_URL}/take`;
+const PRIMARY_SERVICE_URL = `${import.meta.env.VITE_API_URL}/take`;
 
 /**
  * Generates a screenshot URL, prioritizing the primary local service.
