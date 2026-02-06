@@ -73,7 +73,7 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ onClose, o
       const { accessToken } = JSON.parse(userData);
 
       // Create order
-      const orderResponse = await fetch('/api/subscription/create-order', {
+      const orderResponse = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/subscription/create-order`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -117,7 +117,7 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ onClose, o
         handler: async (response: any) => {
           try {
             // Verify payment
-            const verifyResponse = await fetch('/api/subscription/verify-payment', {
+            const verifyResponse = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/subscription/verify-payment`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
