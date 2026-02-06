@@ -18,6 +18,20 @@ const Subscription = require('./models/Subscription');
 const emailService = require('./services/emailService');
 
 const app = express();
+const cors = require('cors');
+
+app.use(cors({
+  origin: [
+    process.env.FRONTEND_URL
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
+
+// IMPORTANT: handle preflight
+app.options('*', cors());
+
 const PORT = process.env.PORT || 3001;
 
 // Middleware
