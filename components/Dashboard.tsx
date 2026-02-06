@@ -1,0 +1,286 @@
+import React, { useState, useEffect } from 'react';
+import { StorageService } from '../services/storageService';
+import { ApiService } from '../services/apiService';
+import { fetchScreenshotAsBase64 } from '../services/screenshotService';
+import { SubscriptionModal } from './SubscriptionModal';
+import { Project, ProjectStatus } from '../types';
+import { Plus, ExternalLink, Trash2, Loader2, ArrowRight, LogOut, Crown } from 'lucide-react';
+
+interface DashboardProps {
+  onNavigate: (path: string) => void;
+  onLogout: () => void;
+}
+
+export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) => {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [isCreating, setIsCreating] = useState(false);
+  const [newProjectData, setNewProjectData] = useState({ name: '', websiteUrl: '', clientName: '' });
+  const [loading, setLoading] = useState(false);
+  const [userName, setUserName] = useState('');
+  const [userEmail, setUserEmail] = useState('');
+  const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
+  const [hasActiveSubscription, setHasActiveSubscription] = useState(false);
+  const [loadingSubscription, setLoadingSubscription] = useState(true);
+
+  useEffect(() => {
+    const user = StorageService.getUser();
+    if (user) {
+      setUserName(user.name);
+      setUserEmail(user.email);
+      loadProjects();
+      checkSubscription();
+    } else {
+      onNavigate('/login');
+    }
+  }, []);
+
+  const loadProjects = async () => {
+    try {
+      const projectsData = await ApiService.getProjects();
+      setProjects(projectsData);
+    } catch (error) {
+      console.error('[Dashboard] Failed to load projects:', error);
+    }
+  };
+
+  const checkSubscription = async () => {
+    try {
+      const status = await ApiService.getSubscriptionStatus();
+      setHasActiveSubscription(status.hasActiveSubscription);
+    } catch (error) {
+      console.error('[Dashboard] Failed to check subscription:', error);
+    } finally {
+      setLoadingSubscription(false);
+    }
+  };
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const user = StorageService.getUser();
+      if (!user) {
+        throw new Error("User not authenticated.");
+      }
+
+      const screenshotBase64 = await fetchScreenshotAsBase64(newProjectData.websiteUrl);
+
+      const payload: any = {
+        ...newProjectData,
+        initialPageUrl: screenshotBase64,
+      };
+
+      const newProject = await ApiService.createProject(payload);
+
+      setProjects([newProject, ...projects]);
+      setIsCreating(false);
+      setNewProjectData({ name: '', websiteUrl: '', clientName: '' });
+      
+      onNavigate(`/project/${newProject.id}`);
+    } catch (error: any) {
+      if (error.message === 'SUBSCRIPTION_REQUIRED') {
+        setIsCreating(false);
+        setShowSubscriptionModal(true);
+      } else {
+        if (error.message === "User not authenticated.") onNavigate('/login');
+        alert("Failed to create project. Make sure the screenshot service is running and the URL is valid.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDelete = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (confirm("Are you sure you want to delete this project?")) {
+      try {
+        await ApiService.deleteProject(id);
+        setProjects(projects.filter(p => p.id !== id));
+      } catch (error) {
+        alert('Failed to delete project');
+      }
+    }
+  };
+
+  return (
+    <div className="max-w-6xl mx-auto px-4 py-12">
+      <div className="flex justify-between items-center mb-10">
+        <div>
+          <h1 className="text-3xl font-bold text-slate-900">Projects</h1>
+          <p className="text-slate-500 mt-1">Welcome, <span className="font-medium text-slate-600">{userName || 'Guest'}</span></p>
+          {!loadingSubscription && !hasActiveSubscription && (
+            <p className="text-amber-600 text-sm mt-1 flex items-center gap-1">
+              <Crown size={14} />
+              Subscribe to create unlimited projects
+            </p>
+          )}
+        </div>
+        <div className="flex items-center gap-4">
+          {!loadingSubscription && !hasActiveSubscription && (
+            <button 
+              onClick={() => setShowSubscriptionModal(true)}
+              className="flex items-center gap-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white px-4 py-2.5 rounded-lg transition-all shadow-sm font-medium"
+            >
+              <Crown size={16} />
+              Subscribe
+            </button>
+          )}
+          <button 
+            onClick={onLogout}
+            className="flex items-center gap-2 text-slate-500 hover:text-red-600 px-3 py-2.5 rounded-lg transition-all text-sm font-medium"
+            title="Logout"
+          >
+            <LogOut size={16} />
+          </button>
+          <button 
+            onClick={() => setIsCreating(true)}
+            className="flex items-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-5 py-2.5 rounded-lg transition-all shadow-sm font-medium"
+          >
+            <Plus size={18} />
+            New Project
+          </button>
+        </div>
+      </div>
+
+      {isCreating && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 backdrop-blur-sm">
+          <div className="bg-white rounded-xl shadow-2xl p-8 w-full max-w-md animate-fade-in">
+            <h2 className="text-xl font-bold mb-6 text-slate-900">Create New Project</h2>
+            <form onSubmit={handleCreate} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Project Name</label>
+                <input 
+                  required
+                  type="text" 
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  placeholder="e.g. E-Commerce Redesign"
+                  value={newProjectData.name}
+                  onChange={e => setNewProjectData({...newProjectData, name: e.target.value})}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Client Name (Optional)</label>
+                <input 
+                  type="text" 
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  placeholder="e.g. Acme Corp"
+                  value={newProjectData.clientName}
+                  onChange={e => setNewProjectData({...newProjectData, clientName: e.target.value})}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Website URL</label>
+                <input 
+                  required
+                  type="url" 
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  placeholder="https://example.com"
+                  value={newProjectData.websiteUrl}
+                  onChange={e => setNewProjectData({...newProjectData, websiteUrl: e.target.value})}
+                />
+                {/* <p className="text-xs text-slate-500 mt-2">
+                  System will capture Home, About, and Contact pages automatically.
+                </p> */}
+              </div>
+              
+              <div className="flex justify-end gap-3 mt-6">
+                <button 
+                  type="button" 
+                  onClick={() => setIsCreating(false)}
+                  className="px-4 py-2 text-slate-600 hover:text-slate-900 font-medium"
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit" 
+                  disabled={loading}
+                  className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium disabled:opacity-50"
+                >
+                  {loading ? <Loader2 size={18} className="animate-spin" /> : null}
+                  {loading ? 'Scanning pages...' : 'Create Project'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {projects.length === 0 ? (
+        <div className="text-center py-20 bg-white rounded-xl border border-slate-200 border-dashed">
+          <p className="text-slate-500 mb-4">No projects yet. Start by creating one.</p>
+          <button onClick={() => setIsCreating(true)} className="text-blue-600 font-medium hover:underline">
+            Create your first project
+          </button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {projects.map(project => {
+            const coverImage = project.pages?.[0]?.imageUrl;
+            const pageCount = project.pages?.length || 0;
+            
+            return (
+              <div 
+                key={project.id} 
+                onClick={() => onNavigate(`/project/${project.id}`)}
+                className="group bg-white rounded-xl border border-slate-200 hover:border-blue-400 hover:shadow-lg transition-all cursor-pointer overflow-hidden flex flex-col h-full"
+              >
+                <div className="h-48 bg-slate-100 overflow-hidden relative">
+                  {coverImage ? (
+                    <img src={coverImage} alt={project.name} className="w-full h-full object-cover object-top opacity-90 group-hover:opacity-100 transition-opacity" />
+                  ) : (
+                    <div className="flex items-center justify-center h-full text-slate-400">No Image</div>
+                  )}
+                  <div className="absolute top-3 right-3 flex gap-2">
+                     <span className="bg-slate-900/70 text-white text-xs font-bold px-2 py-1 rounded-full backdrop-blur-sm">
+                       {pageCount} Pages
+                     </span>
+                     {project.status === ProjectStatus.PUBLISHED && (
+                       <span className="bg-green-100 text-green-700 text-xs font-bold px-2 py-1 rounded-full border border-green-200">
+                         PUBLISHED
+                       </span>
+                     )}
+                  </div>
+                </div>
+                <div className="p-5 flex-1 flex flex-col">
+                  <div className="flex justify-between items-start mb-2">
+                    <h3 className="font-bold text-lg text-slate-900 line-clamp-1">{project.name}</h3>
+                  </div>
+                  <p className="text-sm text-slate-500 mb-4">{project.clientName || 'No Client Specified'}</p>
+                  <div className="mt-auto flex justify-between items-center border-t border-slate-100 pt-4">
+                    <span className="text-xs text-slate-400">
+                      {new Date(project.createdAt).toLocaleDateString()}
+                    </span>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={(e) => handleDelete(project.id, e)}
+                        className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                      <button className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors">
+                        <ArrowRight size={16} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Subscription Modal */}
+      {showSubscriptionModal && (
+        <SubscriptionModal
+          onClose={() => setShowSubscriptionModal(false)}
+          onSuccess={() => {
+            setShowSubscriptionModal(false);
+            checkSubscription();
+            setIsCreating(true);
+          }}
+          userEmail={userEmail}
+        />
+      )}
+    </div>
+  );
+};
