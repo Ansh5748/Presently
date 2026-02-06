@@ -859,7 +859,7 @@ app.get('/take', async (req, res) => {
     browser = await puppeteer.launch({
       headless: "new",
       ...(isProd && {
-          executablePath: puppeteer.executablePath(),
+          executablePath: '/usr/bin/google-chrome-stable',
         }),
        args: [
         '--no-sandbox',
