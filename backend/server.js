@@ -858,9 +858,6 @@ app.get('/take', async (req, res) => {
     console.log(`[Screenshot] Launching browser for URL: ${url}`);
     browser = await puppeteer.launch({
       headless: "new",
-      ...(isProd && {
-          executablePath: '/usr/bin/google-chrome-stable',
-        }),
        args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
