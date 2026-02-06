@@ -26,7 +26,7 @@ This project consists of two parts: a frontend React application and a backend N
 
 ### 1. Setup the Frontend
 
-In your first terminal window, navigate to the project's root directory:
+In your first terminal window, navigate to the project's root directory and install the dependencies:
 ```bash
 npm install
 npm run dev
