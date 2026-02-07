@@ -856,14 +856,24 @@ app.get('/take', async (req, res) => {
   let browser;
   try {
     console.log(`[Screenshot] Launching browser for URL: ${url}`);
-    browser = await puppeteer.launch({
+    // browser = await puppeteer.launch({
+    
+    const launchOptions = {
       headless: "new",
        args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         ...(isProd ? ['--disable-dev-shm-usage', '--single-process'] : [])
       ],
-    });
+    // });
+    };
+
+    if (isProd) {
+      launchOptions.executablePath = puppeteer.executablePath();
+      console.log(`[Screenshot] Using executablePath: ${launchOptions.executablePath}`);
+    }
+
+    browser = await puppeteer.launch(launchOptions);
 
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 800 });
