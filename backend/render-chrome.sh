@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
 set -e
 
-if [ ! -f /opt/render/chrome/chrome ]; then
-  echo "Installing Chromium manually..."
-  mkdir -p /opt/render/chrome
-  curl -L https://storage.googleapis.com/chromium-browser-snapshots/Linux_x64/1191205/chrome-linux.zip -o chrome.zip
-  unzip chrome.zip
-  mv chrome-linux/* /opt/render/chrome/
-  chmod +x /opt/render/chrome/chrome
+CHROME_DIR="/opt/render/chrome"
+CHROME_BIN="$CHROME_DIR/chrome"
+
+if [ -x "$CHROME_BIN" ]; then
+  echo "Chromium already installed"
+  exit 0
 fi
+
+echo "Installing Chromium via apt..."
+
+apt-get update
+apt-get install -y chromium
+
+mkdir -p "$CHROME_DIR"
+ln -s /usr/bin/chromium "$CHROME_BIN"
+
+echo "Chromium installed at $CHROME_BIN"
