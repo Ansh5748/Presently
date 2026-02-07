@@ -879,8 +879,8 @@ app.get('/take', async (req, res) => {
     await page.setViewport({ width: 1280, height: 800 });
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36');
 
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    await page.goto(url, { waitUntil: 'load', timeout: 60000 });
+    // await new Promise(resolve => setTimeout(resolve, 3000));
 
     const screenshotBuffer = await page.screenshot({
       fullPage: true,
