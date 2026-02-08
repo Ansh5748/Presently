@@ -80,8 +80,9 @@ const compressBase64 = async (base64String) => {
   let browser;
   try {
     browser = await puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+      protocolTimeout: 60000
     });
     const page = await browser.newPage();
     
@@ -944,6 +945,38 @@ app.get('/take', async (req, res) => {
   let page;
   let pageClosed = false;
 
+  // Helper to optimize screenshot size
+  const ensureSafeSize = async (buffer) => {
+    if (!buffer) return buffer;
+    const TARGET_SIZE_BYTES = 500 * 1024; // 500KB target
+    const HARD_LIMIT_BYTES = 800 * 1024;  // 800KB hard limit
+
+    if (buffer.length <= TARGET_SIZE_BYTES) return buffer;
+
+    console.warn(`[Screenshot] ⚠️ Image size ${(buffer.length / 1024 / 1024).toFixed(2)}MB exceeds target. Compressing...`);
+    
+    try {
+      // Attempt 2: Aggressive Compression (Quality 20)
+      let compressed = await page.screenshot({ fullPage: true, type: 'webp', quality: 20, captureBeyondViewport: true });
+      
+      if (compressed.length <= TARGET_SIZE_BYTES) return compressed;
+
+      console.warn(`[Screenshot] ⚠️ Still large (${(compressed.length / 1024 / 1024).toFixed(2)}MB). Maximizing compression...`);
+      // Attempt 3: Max Compression (Quality 10)
+      compressed = await page.screenshot({ fullPage: true, type: 'webp', quality: 10, captureBeyondViewport: true });
+      
+      if (compressed.length <= HARD_LIMIT_BYTES) return compressed;
+
+      // Final Fallback: Viewport Only
+      console.warn(`[Screenshot] ⚠️ Image (${(compressed.length / 1024 / 1024).toFixed(2)}MB) still too large. Falling back to Viewport Only...`);
+      return await page.screenshot({ fullPage: false, type: 'webp', quality: 70 });
+      
+    } catch (e) {
+      console.warn('[Screenshot] Compression attempt failed', e);
+      return buffer; // Return original if compression fails
+    }
+  };
+
   // 🔁 helper: take screenshot attempt
   const attemptScreenshot = async (userAgent, options = {}) => {
     const { scroll = true, fullPage = true } = options;
@@ -1186,41 +1219,44 @@ app.get('/take', async (req, res) => {
       ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
     }
 
-    // 1️⃣ Attempt 1: Standard (Scroll + FullPage)
-    let screenshot = await attemptScreenshot(ua, { scroll: true, fullPage: true });
+    // // 1️⃣ Attempt 1: Standard (Scroll + FullPage)
+    // let screenshot = await attemptScreenshot(ua, { scroll: true, fullPage: true });
 
-    // 📏 Size Check & Optimization (Target: ~500KB)
-    const TARGET_SIZE_BYTES = 500 * 1024; // 500KB target
-    const HARD_LIMIT_BYTES = 800 * 1024;  // 800KB hard limit
+    // // 📏 Size Check & Optimization (Target: ~500KB)
+    // const TARGET_SIZE_BYTES = 500 * 1024; // 500KB target
+    // const HARD_LIMIT_BYTES = 800 * 1024;  // 800KB hard limit
 
-    if (screenshot.length > TARGET_SIZE_BYTES) {
-      console.warn(`[Screenshot] ⚠️ Image size ${(screenshot.length / 1024 / 1024).toFixed(2)}MB exceeds target. Compressing...`);
+    // if (screenshot.length > TARGET_SIZE_BYTES) {
+    //   console.warn(`[Screenshot] ⚠️ Image size ${(screenshot.length / 1024 / 1024).toFixed(2)}MB exceeds target. Compressing...`);
       
-      // Attempt 2: Aggressive Compression (Quality 20)
-      try {
-        screenshot = await page.screenshot({ fullPage: true, type: 'webp', quality: 20, captureBeyondViewport: true });
-      } catch (e) { console.warn('Compression attempt failed', e); }
+    //   // Attempt 2: Aggressive Compression (Quality 20)
+    //   try {
+    //     screenshot = await page.screenshot({ fullPage: true, type: 'webp', quality: 20, captureBeyondViewport: true });
+    //   } catch (e) { console.warn('Compression attempt failed', e); }
 
-      if (screenshot.length > TARGET_SIZE_BYTES) {
-         console.warn(`[Screenshot] ⚠️ Still large (${(screenshot.length / 1024 / 1024).toFixed(2)}MB). Maximizing compression...`);
-         // Attempt 3: Max Compression (Quality 10) + Resize via viewport (simulated by just taking a lower quality shot)
-         try {
-            screenshot = await page.screenshot({ fullPage: true, type: 'webp', quality: 10, captureBeyondViewport: true });
-         } catch (e) { console.warn('Max compression failed', e); }
-      }
+    //   if (screenshot.length > TARGET_SIZE_BYTES) {
+    //      console.warn(`[Screenshot] ⚠️ Still large (${(screenshot.length / 1024 / 1024).toFixed(2)}MB). Maximizing compression...`);
+    //      // Attempt 3: Max Compression (Quality 10) + Resize via viewport (simulated by just taking a lower quality shot)
+    //      try {
+    //         screenshot = await page.screenshot({ fullPage: true, type: 'webp', quality: 10, captureBeyondViewport: true });
+    //      } catch (e) { console.warn('Max compression failed', e); }
+    //   }
 
-      // Final Fallback: Safe Mode (Viewport Only) if still too big
-      // This guarantees the image is small enough for MongoDB
-      if (screenshot.length > HARD_LIMIT_BYTES) {
-        console.warn(`[Screenshot] ⚠️ Image (${(screenshot.length / 1024 / 1024).toFixed(2)}MB) still too large. Falling back to Viewport Only...`);
-        if (browser) await browser.close().catch(() => {});
-        // Re-launch or just re-use if active, but attemptScreenshot handles new page if needed, 
-        // actually we need to call the helper which expects browser to be open or handles it.
-        // Since we closed browser above to clear memory, we need to restart logic or just use viewport on current page if open?
-        // The helper 'attemptScreenshot' launches browser. So we are good.
-        screenshot = await attemptScreenshot(ua, { scroll: false, fullPage: false });
-      }
-    }
+    //   // Final Fallback: Safe Mode (Viewport Only) if still too big
+    //   // This guarantees the image is small enough for MongoDB
+    //   if (screenshot.length > HARD_LIMIT_BYTES) {
+    //     console.warn(`[Screenshot] ⚠️ Image (${(screenshot.length / 1024 / 1024).toFixed(2)}MB) still too large. Falling back to Viewport Only...`);
+    //     if (browser) await browser.close().catch(() => {});
+    //     // Re-launch or just re-use if active, but attemptScreenshot handles new page if needed, 
+    //     // actually we need to call the helper which expects browser to be open or handles it.
+    //     // Since we closed browser above to clear memory, we need to restart logic or just use viewport on current page if open?
+    //     // The helper 'attemptScreenshot' launches browser. So we are good.
+    //     screenshot = await attemptScreenshot(ua, { scroll: false, fullPage: false });
+    //   }
+    // }
+
+    let screenshot = await attemptScreenshot(ua, { scroll: true, fullPage: true });
+    screenshot = await ensureSafeSize(screenshot);
 
     if (!screenshot || screenshot.length === 0) {
       throw new Error('Empty screenshot buffer');
@@ -1246,7 +1282,9 @@ app.get('/take', async (req, res) => {
       }
 
       // 2️⃣ Attempt 2: Light Mode (No Manual Scroll + FullPage) - Prevents OOM on heavy sites
-      const screenshot = await attemptScreenshot(ua, { scroll: false, fullPage: true });
+      // const screenshot = await attemptScreenshot(ua, { scroll: false, fullPage: true });
+      let screenshot = await attemptScreenshot(ua, { scroll: false, fullPage: true });
+      screenshot = await ensureSafeSize(screenshot);
 
       console.log(`[Screenshot] ✅ Light Mode successful for ${url}`);
       res.set('Content-Type', 'image/webp');
@@ -1269,8 +1307,10 @@ app.get('/take', async (req, res) => {
         }
 
         // 3️⃣ Attempt 3: Safe Mode (Viewport Only)
-        const safeScreenshot = await attemptScreenshot(ua, { scroll: false, fullPage: false });
-        
+        // const safeScreenshot = await attemptScreenshot(ua, { scroll: false, fullPage: false });
+        let safeScreenshot = await attemptScreenshot(ua, { scroll: false, fullPage: false });
+        safeScreenshot = await ensureSafeSize(safeScreenshot);
+
         console.log(`[Screenshot] ✅ Safe Mode screenshot captured for ${url}`);
         res.set('Content-Type', 'image/webp');
         return res.send(safeScreenshot);
