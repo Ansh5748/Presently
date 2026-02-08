@@ -62,6 +62,58 @@ const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET;
 // Helper functions
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
+// Compression Helper
+const compressBase64 = async (base64String) => {
+  if (!base64String || typeof base64String !== 'string' || !base64String.startsWith('data:image')) {
+    return base64String;
+  }
+
+  // Check size (approximate)
+  const sizeInBytes = (base64String.length * 3) / 4;
+  const TARGET_SIZE = 500 * 1024;
+  const MAX_SIZE = 800 * 1024;
+
+  if (sizeInBytes <= MAX_SIZE) return base64String;
+
+  console.log(`[Compression] Optimizing image (${(sizeInBytes / 1024 / 1024).toFixed(2)}MB)...`);
+
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      headless: 'new',
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    });
+    const page = await browser.newPage();
+    
+    await page.setContent(`<html><body style="margin:0;padding:0;"><img id="img" src="${base64String}" /></body></html>`);
+    const img = await page.$('#img');
+    const box = await img.boundingBox();
+
+    if (box) {
+      await page.setViewport({ width: Math.ceil(box.width), height: Math.ceil(box.height) });
+      
+      // Try progressive quality reduction
+      let buffer = await page.screenshot({ type: 'webp', quality: 50, fullPage: true });
+      
+      if (buffer.length > TARGET_SIZE) {
+         buffer = await page.screenshot({ type: 'webp', quality: 25, fullPage: true });
+      }
+      
+      if (buffer.length > MAX_SIZE) {
+         buffer = await page.screenshot({ type: 'webp', quality: 5, fullPage: true });
+      }
+
+      console.log(`[Compression] Reduced to ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
+      return `data:image/webp;base64,${buffer.toString('base64')}`;
+    }
+  } catch (error) {
+    console.error('[Compression] Failed:', error.message);
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+  }
+  return base64String;
+};
+
 // Special free email addresses
 const FREE_EMAILS = {
   'divyanshgupta5748@gmail.com': 'skip', // Skip payment entirely
@@ -551,6 +603,9 @@ app.post('/projects', authenticateToken, async (req, res) => {
       }
     }
 
+    // Compress initialPageUrl if needed
+    const compressedImageUrl = await compressBase64(initialPageUrl);
+
     const projectId = generateId();
     const project = new Project({
       id: projectId,
@@ -561,7 +616,7 @@ app.post('/projects', authenticateToken, async (req, res) => {
       pages: [{
         id: generateId(),
         name: 'Main Page',
-        imageUrl: initialPageUrl,
+        imageUrl: compressedImageUrl,
         originalUrl: websiteUrl
       }],
       status: 'DRAFT'
@@ -589,10 +644,13 @@ app.post('/projects/:projectId/pages', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Project not found' });
     }
 
+    // Compress imageUrl if needed
+    const compressedImageUrl = await compressBase64(imageUrl);
+
     const newPage = {
       id: generateId(),
       name,
-      imageUrl,
+      imageUrl: compressedImageUrl,
       originalUrl
     };
 
@@ -634,6 +692,14 @@ app.patch('/projects/:projectId/pages/:pageId', authenticateToken, async (req, r
         projectPins[i].number = i + 1;
         await projectPins[i].save();
       }
+    }
+
+    // Compress images if updated
+    if (updates.imageUrl) {
+      updates.imageUrl = await compressBase64(updates.imageUrl);
+    }
+    if (updates.mobileImageUrl) {
+      updates.mobileImageUrl = await compressBase64(updates.mobileImageUrl);
     }
 
     page.set(updates);
