@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { StorageService } from '../services/storageService';
 import { ApiService } from '../services/apiService';
 import { fetchScreenshotAsBase64 } from '../services/screenshotService';
 import { refineText } from '../services/geminiService';
@@ -120,7 +121,12 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       setTempPin(null);
       setSelectedPinId(null);
       setIsEditingPin(false);
-    } catch (error) {
+    } catch (error: any) {
+      if (error.status === 403 || (error.response && error.response.status === 403)) {
+        StorageService.clearUser();
+        onNavigate('/login');
+        return;
+      }
       alert('Failed to save pin');
     }
   };
@@ -135,7 +141,12 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       setSelectedPinId(null);
       setTempPin(null);
       setIsEditingPin(false);
-    } catch (error) {
+    } catch (error: any) {
+      if (error.status === 403 || (error.response && error.response.status === 403)) {
+        StorageService.clearUser();
+        onNavigate('/login');
+        return;
+      }
       alert('Failed to delete pin');
     }
   };
@@ -176,7 +187,12 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         ? "Project published successfully!" 
         : "Live version has been updated with your latest changes."
       );
-    } catch (error) {
+    } catch (error: any) {
+      if (error.status === 403 || (error.response && error.response.status === 403)) {
+        StorageService.clearUser();
+        onNavigate('/login');
+        return;
+      }
       alert('Failed to publish project');
     }
   };
@@ -244,6 +260,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       setActivePageId(newPage.id);
     } catch (error: any) {
       if (error.status === 403 || (error.response && error.response.status === 403)) {
+        StorageService.clearUser();
         alert("Session expired. Please log in again.");
         onNavigate('/login');
         return;
@@ -274,7 +291,12 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
           const updatedProject = await ApiService.getProject(project.id);
           setProject(updatedProject);
           setActivePageId(newPage.id);
-        } catch (error) {
+        } catch (error: any) {
+          if (error.status === 403 || (error.response && error.response.status === 403)) {
+            StorageService.clearUser();
+            onNavigate('/login');
+            return;
+          }
           alert('Failed to upload image');
         }
       };
@@ -331,6 +353,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         setPins(updatedPins);
       } catch (error: any) {
         if (error.status === 403 || (error.response && error.response.status === 403)) {
+          StorageService.clearUser();
           alert("Session expired. Please log in again.");
           onNavigate('/login');
           return;
@@ -351,7 +374,12 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         await ApiService.updatePage(project.id, page.id, { name: finalName });
         const updatedProject = await ApiService.getProject(project.id);
         setProject(updatedProject);
-      } catch (error) {
+      } catch (error: any) {
+        if (error.status === 403 || (error.response && error.response.status === 403)) {
+          StorageService.clearUser();
+          onNavigate('/login');
+          return;
+        }
         alert('Failed to rename page');
       }
     }
@@ -381,7 +409,12 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         
         const updatedPins = await ApiService.getPins(project.id);
         setPins(updatedPins);
-      } catch (error) {
+      } catch (error: any) {
+        if (error.status === 403 || (error.response && error.response.status === 403)) {
+          StorageService.clearUser();
+          onNavigate('/login');
+          return;
+        }
         alert('Failed to delete page');
       }
     }
@@ -410,7 +443,12 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
           pages: prev.pages.map(p => p.id === activePage.id ? { ...p, mobileImageUrl: mobileScreenshot } : p)
         } : null);
 
-      } catch (error) {
+      } catch (error: any) {
+        if (error.status === 403 || (error.response && error.response.status === 403)) {
+          StorageService.clearUser();
+          onNavigate('/login');
+          return;
+        }
         alert("Failed to capture mobile screenshot.");
         setViewMode('desktop'); // Revert on failure
       } finally {

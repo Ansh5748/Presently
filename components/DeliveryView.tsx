@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { StorageService } from '../services/storageService';
 import { ApiService } from '../services/apiService';
 import { Project, Pin, ProjectPage } from '../types';
-import logoImg from '../src/assets/presently_logo.png';
 import { Loader2, Layout, MessageSquare, Monitor, Smartphone } from 'lucide-react';
 
 interface DeliveryViewProps {
   projectId: string;
   isLiveView?: boolean;
+  onNavigate?: (path: string) => void;
 }
 
-export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveView = false }) => {
+export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveView = false, onNavigate }) => {
   const [project, setProject] = useState<Project | null>(null);
   const [pins, setPins] = useState<Pin[]>([]);
   const [activePinId, setActivePinId] = useState<string | null>(null);
@@ -54,7 +55,12 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
     if (page) {
       try {
         await ApiService.updatePage(project.id, activePageId, { details: (page as any).details });
-      } catch (error) {
+      } catch (error: any) {
+        if (!isLiveView && onNavigate && (error.status === 403 || (error.response && error.response.status === 403))) {
+          StorageService.clearUser();
+          onNavigate('/login');
+          return;
+        }
         console.error('Failed to save details:', error);
       }
     }
@@ -120,7 +126,6 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
       {/* Navigation / Brand Bar (Minimal) */}
       <nav className="bg-white border-b border-slate-200 sticky top-0 z-30 px-4 md:px-6 py-3 md:py-4 flex justify-between items-center shadow-sm flex-none">
         <div className="flex items-center gap-3">
-          <img src={logoImg} alt="Logo" className="h-12 w-auto object-contain" />
           <div className="h-6 w-px bg-slate-200"></div>
           <span className="font-semibold text-slate-900">{project.name}</span>
         </div>

@@ -56,12 +56,12 @@ export const App: React.FC = () => {
     // Publicly accessible "live" route
     if (path.startsWith('/live/')) {
       const id = path.split('/live/')[1];
-      return <DeliveryView projectId={id} isLiveView={true} />;
+      return <DeliveryView projectId={id} isLiveView={true} onNavigate={handleNavigate} />;
     }
     // Draft preview route (will be protected)
     if (path.startsWith('/draft/')) {
       const id = path.split('/draft/')[1];
-      return <DeliveryView projectId={id} />;
+      return <DeliveryView projectId={id} onNavigate={handleNavigate} />;
     }
 
     // Auth routes

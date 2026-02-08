@@ -40,6 +40,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
       const projectsData = await ApiService.getProjects();
       setProjects(projectsData);
     } catch (error) {
+      if ((error as any).status === 403 || ((error as any).response && (error as any).response.status === 403)) {
+        StorageService.clearUser();
+        onNavigate('/login');
+        return;
+      }
       console.error('[Dashboard] Failed to load projects:', error);
     }
   };
@@ -49,6 +54,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
       const status = await ApiService.getSubscriptionStatus();
       setHasActiveSubscription(status.hasActiveSubscription);
     } catch (error) {
+      if ((error as any).status === 403 || ((error as any).response && (error as any).response.status === 403)) {
+        StorageService.clearUser();
+        onNavigate('/login');
+        return;
+      }
       console.error('[Dashboard] Failed to check subscription:', error);
     } finally {
       setLoadingSubscription(false);
