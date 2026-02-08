@@ -895,7 +895,7 @@ app.get('/take', async (req, res) => {
         '--disable-dev-shm-usage', // Always enable for stability on heavy pages
         '--disable-gpu',
         '--disable-blink-features=AutomationControlled',
-        '--window-size=1920,1080',
+        '--window-size=1280,800', // Reduced from 1920x1080 to save size
         '--disable-web-security',
         '--disable-features=IsolateOrigins,site-per-process',
         '--disable-site-isolation-trials',
@@ -966,8 +966,8 @@ app.get('/take', async (req, res) => {
     const isMobile = type === 'mobile';
     
     await page.setViewport({ 
-      width: isMobile ? 375 : 1920, 
-      height: isMobile ? 667 : 1080,
+      width: isMobile ? 375 : 1280, // Reduced desktop width
+      height: isMobile ? 667 : 800,
       isMobile: isMobile,
       hasTouch: isMobile,
       deviceScaleFactor: isMobile ? 2 : 1
@@ -1123,29 +1123,30 @@ app.get('/take', async (req, res) => {
     // 1️⃣ Attempt 1: Standard (Scroll + FullPage)
     let screenshot = await attemptScreenshot(ua, { scroll: true, fullPage: true });
 
-    // 📏 Size Check & Optimization (Target: ~1MB)
-    const MAX_SIZE_BYTES = 1024 * 1024; // 1MB soft limit
-    const DANGER_LIMIT = 2.5 * 1024 * 1024; // 2.5MB hard limit (MongoDB safety)
+    // 📏 Size Check & Optimization (Target: ~500KB)
+    const TARGET_SIZE_BYTES = 500 * 1024; // 500KB target
+    const HARD_LIMIT_BYTES = 800 * 1024;  // 800KB hard limit
 
-    if (screenshot.length > MAX_SIZE_BYTES) {
+    if (screenshot.length > TARGET_SIZE_BYTES) {
       console.warn(`[Screenshot] ⚠️ Image size ${(screenshot.length / 1024 / 1024).toFixed(2)}MB exceeds target. Compressing...`);
       
-      // Attempt 2: Aggressive Compression (Quality 30)
+      // Attempt 2: Aggressive Compression (Quality 20)
       try {
-        screenshot = await page.screenshot({ fullPage: true, type: 'webp', quality: 30, captureBeyondViewport: true });
+        screenshot = await page.screenshot({ fullPage: true, type: 'webp', quality: 20, captureBeyondViewport: true });
       } catch (e) { console.warn('Compression attempt failed', e); }
 
-      if (screenshot.length > MAX_SIZE_BYTES) {
+      if (screenshot.length > TARGET_SIZE_BYTES) {
          console.warn(`[Screenshot] ⚠️ Still large (${(screenshot.length / 1024 / 1024).toFixed(2)}MB). Maximizing compression...`);
-         // Attempt 3: Max Compression (Quality 10)
+         // Attempt 3: Max Compression (Quality 10) + Resize via viewport (simulated by just taking a lower quality shot)
          try {
             screenshot = await page.screenshot({ fullPage: true, type: 'webp', quality: 10, captureBeyondViewport: true });
          } catch (e) { console.warn('Max compression failed', e); }
       }
 
-      // Final Fallback: Safe Mode if still dangerously huge for MongoDB
-      if (screenshot.length > DANGER_LIMIT) {
-        console.warn(`[Screenshot] ⚠️ Image (${(screenshot.length / 1024 / 1024).toFixed(2)}MB) too large for DB. Falling back to Safe Mode (Viewport)...`);
+      // Final Fallback: Safe Mode (Viewport Only) if still too big
+      // This guarantees the image is small enough for MongoDB
+      if (screenshot.length > HARD_LIMIT_BYTES) {
+        console.warn(`[Screenshot] ⚠️ Image (${(screenshot.length / 1024 / 1024).toFixed(2)}MB) still too large. Falling back to Viewport Only...`);
         if (browser) await browser.close().catch(() => {});
         // Re-launch or just re-use if active, but attemptScreenshot handles new page if needed, 
         // actually we need to call the helper which expects browser to be open or handles it.
