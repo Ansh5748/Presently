@@ -1123,9 +1123,9 @@ app.get('/take', async (req, res) => {
     // 1️⃣ Attempt 1: Standard (Scroll + FullPage)
     let screenshot = await attemptScreenshot(ua, { scroll: true, fullPage: true });
 
-    // 📏 Size Check & Optimization (Target: ~2MB)
-    const MAX_SIZE_BYTES = 2.5 * 1024 * 1024; // 2.5MB soft limit
-    const DANGER_LIMIT = 9 * 1024 * 1024; // 9MB hard limit (MongoDB safety)
+    // 📏 Size Check & Optimization (Target: ~1MB)
+    const MAX_SIZE_BYTES = 1024 * 1024; // 1MB soft limit
+    const DANGER_LIMIT = 2.5 * 1024 * 1024; // 2.5MB hard limit (MongoDB safety)
 
     if (screenshot.length > MAX_SIZE_BYTES) {
       console.warn(`[Screenshot] ⚠️ Image size ${(screenshot.length / 1024 / 1024).toFixed(2)}MB exceeds target. Compressing...`);
