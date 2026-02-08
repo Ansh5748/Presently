@@ -614,8 +614,8 @@ app.patch('/projects/:projectId/pages/:pageId', authenticateToken, async (req, r
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    const pageIndex = project.pages.findIndex(p => p.id === pageId);
-    if (pageIndex === -1) {
+    const page = project.pages.find(p => p.id === pageId);
+    if (!page) {
       return res.status(404).json({ error: 'Page not found' });
     }
 
@@ -631,10 +631,10 @@ app.patch('/projects/:projectId/pages/:pageId', authenticateToken, async (req, r
       }
     }
 
-    project.pages[pageIndex] = { ...project.pages[pageIndex].toObject(), ...updates };
+    page.set(updates);
     await project.save();
 
-    res.json(project.pages[pageIndex]);
+    res.json(page);
 
   } catch (error) {
     console.error('[Update Page] Error:', error);
@@ -648,17 +648,20 @@ app.delete('/projects/:projectId/pages/:pageId', authenticateToken, async (req, 
     const { projectId, pageId } = req.params;
     const userId = req.user.id;
 
+    // Check if project exists and has more than 1 page
     const project = await Project.findOne({ id: projectId, userId });
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
-
     if (project.pages.length <= 1) {
       return res.status(400).json({ error: 'Project must have at least one page' });
     }
 
-    project.pages = project.pages.filter(p => p.id !== pageId);
-    await project.save();
+    // Atomic update to remove page (Prevents VersionError)
+    await Project.findOneAndUpdate(
+      { id: projectId, userId },
+      { $pull: { pages: { id: pageId } } }
+    );
 
     // Delete associated pins
     await Pin.deleteMany({ projectId, pageId });
@@ -761,7 +764,7 @@ app.get('/projects/:projectId/pins', async (req, res) => {
 app.post('/projects/:projectId/pins', authenticateToken, async (req, res) => {
   try {
     const { projectId } = req.params;
-    const { pageId, x, y, title, description } = req.body;
+    const { pageId, x, y, title, description, device } = req.body;
     const userId = req.user.id;
 
     // Verify project ownership
@@ -782,7 +785,8 @@ app.post('/projects/:projectId/pins', authenticateToken, async (req, res) => {
       y,
       number: nextNumber,
       title,
-      description
+      description,
+      device: device || 'desktop'
     });
 
     await pin.save();
@@ -846,61 +850,373 @@ app.delete('/pins/:pinId', authenticateToken, async (req, res) => {
 // ==================== SCREENSHOT SERVICE ====================
 
 app.get('/take', async (req, res) => {
-  const { url } = req.query;
+  let { url, type = 'desktop' } = req.query;
 
   if (!url) {
-    return res.status(400).send('Error: URL query parameter is required.');
+    return res.status(400).json({
+      success: false,
+      message: 'URL query parameter is required',
+    });
   }
 
-  // const isProd = process.env.NODE_ENV === 'production';
+  // Fix: Ensure URL has protocol
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    url = 'https://' + url;
+  }
+
+  // Fix: Prevent caching of screenshots to avoid 304s on retries
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
   let browser;
-  try {
-    console.log(`[Screenshot] Launching browser for URL: ${url}`);
-    
-    const executablePath =
-      process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath();
+  let page;
+  let pageClosed = false;
+
+  // 🔁 helper: take screenshot attempt
+  const attemptScreenshot = async (userAgent, options = {}) => {
+    const { scroll = true, fullPage = true } = options;
+    const isProd = process.env.NODE_ENV === 'production';
+    console.log(`[Screenshot] ⚙️  Config: ${isProd ? 'Production' : 'Development'} | UA: ${type} | Mode: ${scroll ? 'Full' : 'Safe'}`);
 
     const launchOptions = {
       headless: "new",
-      executablePath,
+      protocolTimeout: 240000, 
+      ignoreHTTPSErrors: true, // Ignore SSL certificate errors
+      ignoreDefaultArgs: ['--enable-automation'],
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--single-process',
+        '--disable-dev-shm-usage', // Always enable for stability on heavy pages
+        '--disable-gpu',
+        '--disable-blink-features=AutomationControlled',
+        '--window-size=1920,1080',
+        '--disable-web-security',
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--disable-site-isolation-trials',
+        '--no-first-run',
+        '--no-zygote',
+        // Stealth additions
+        '--disable-infobars',
+        '--exclude-switches=enable-automation',
+        '--use-fake-ui-for-media-stream',
+        '--use-fake-device-for-media-stream',
+        '--enable-features=NetworkService',
+        '--disable-accelerated-2d-canvas', // Improves stability
+        '--disable-gl-drawing-for-tests',
+        '--disable-canvas-aa',
+        ...(isProd ? ['--single-process'] : [])
       ],
     };
 
-    console.log(`[Screenshot] Using executablePath: ${executablePath}`);
+    // Docker/Render specific: Use system chrome if path is provided
+    if (isProd && process.env.PUPPETEER_EXECUTABLE_PATH) {
+      launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+      console.log(`[Screenshot] 🔧 Using custom executable: ${launchOptions.executablePath}`);
+    }
 
+    console.log(`[Screenshot] 🚀 Launching browser...`);
     browser = await puppeteer.launch(launchOptions);
 
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 800 });
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36');
+    page = await browser.newPage();
 
-    await page.goto(url, { waitUntil: 'load', timeout: 60000 });
-    // await new Promise(resolve => setTimeout(resolve, 3000));
-
-    const screenshotBuffer = await page.screenshot({
-      fullPage: true,
-      type: 'jpeg',
-      quality: 50
+    // Stealth: Hide webdriver property
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+      // Mock languages
+      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+      // Mock plugins
+      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+      // Mock maxTouchPoints
+      Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 1 });
+      // Mock chrome
+      window.chrome = { runtime: {} };
+      // Mock permissions
+      const originalQuery = window.navigator.permissions.query;
+      window.navigator.permissions.query = (parameters) => (
+        parameters.name === 'notifications' ?
+          Promise.resolve({ state: 'denied' }) :
+          originalQuery(parameters)
+      );
     });
 
-    console.log('[Screenshot] Screenshot taken successfully');
-    res.set('Content-Type', 'image/jpeg');
-    res.send(screenshotBuffer);
+    // 🛡️ Block heavy media to prevent crashes/timeouts
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+      const resourceType = req.resourceType();
+      if (resourceType === 'media' || resourceType === 'websocket') {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
 
-  } catch (error) {
-    console.error('[Screenshot] Error:', error);
-    res.status(500).send(`Failed to take screenshot. Error: ${error.message}`);
+    // 🔒 lifecycle guards
+    page.on('close', () => { pageClosed = true; });
+    page.on('error', () => { pageClosed = true; });
+    // page.on('framedetached', () => { pageClosed = true; }); // REMOVED: Caused false positives on sites with dynamic iframes
+
+    const isMobile = type === 'mobile';
+    
+    await page.setViewport({ 
+      width: isMobile ? 375 : 1920, 
+      height: isMobile ? 667 : 1080,
+      isMobile: isMobile,
+      hasTouch: isMobile,
+      deviceScaleFactor: isMobile ? 2 : 1
+    });
+    await page.setUserAgent(userAgent);
+
+    // 🚀 navigate
+    console.log(`[Screenshot] 🌍 Navigating to ${url}...`);
+    await page.goto(url, {
+      waitUntil: 'domcontentloaded', // Fast first pass
+      timeout: 60000,
+    });
+
+    // 📏 Ensure page has content before proceeding
+    try {
+      await page.waitForFunction(() => document.body && document.body.scrollHeight > 0, { timeout: 5000 });
+    } catch (e) {
+      console.log(`[Screenshot] ⚠️ Body height check timed out. Waiting for network idle...`);
+      // Fallback: wait for network idle if DOM is empty/stuck
+      try {
+        await page.waitForNetworkIdle({ idleTime: 500, timeout: 10000 });
+      } catch (err) {
+        // Ignore network idle timeout
+      }
+    }
+
+    // 🧠 ensure DOM exists
+    console.log(`[Screenshot] ⏳ Waiting for DOM content...`);
+    await page.waitForFunction(
+      () => !!document && !!document.body,
+    );
+
+    if (pageClosed || page.isClosed()) {
+      throw new Error('PAGE_CLOSED');
+    }
+
+    // 🧬 SPA hydration
+    // await page.waitForTimeout(2000);
+
+    // 🔄 auto-scroll (lazy load)
+    if (scroll) try {
+      console.log(`[Screenshot] 📜 Scrolling to trigger lazy content (videos/shoppable looks)...`);
+      await page.evaluate(async () => {
+        await new Promise(resolve => {
+          let totalHeight = 0;
+          const distance = 150; // Slightly larger chunks for speed
+          const timer = setInterval(() => {
+            const scrollHeight = document.body.scrollHeight;
+            window.scrollBy(0, distance);
+            totalHeight += distance;
+            if (totalHeight >= scrollHeight || totalHeight > 25000) { 
+              clearInterval(timer);
+              resolve();
+            }
+          }, 50); // Faster interval + small chunks = smooth human-like scroll
+        });
+      });
+
+      console.log(`[Screenshot] ⏱️  Waiting for network idle after scroll...`);
+      // Wait for lazy-loaded resources (videos/images) to actually load
+      try {
+        await page.waitForNetworkIdle({ idleTime: 500, timeout: 5000 });
+      } catch (e) {
+        console.log(`[Screenshot] ⚠️ Network idle timeout (continuing anyway)...`);
+      }
+      
+      // Wait for final render/animations
+      await new Promise(r => setTimeout(r, 2000));
+    } catch {
+      console.log(`[Screenshot] ⚠️ Scroll error (non-fatal)`);
+    }
+
+    // 🖼️ wait for images & videos
+    console.log(`[Screenshot] 🖼️  Verifying media loaded...`);
+    if (scroll) try {
+      await page.evaluate(async () => {
+        const images = Array.from(document.images);
+        await Promise.all(
+          images.map(img =>
+            img.complete
+              ? Promise.resolve()
+              : new Promise(res => {
+                  img.onload = img.onerror = res;
+                  setTimeout(res, 2000); // Timeout for individual images
+                })
+          )
+        );
+
+        const videos = Array.from(document.querySelectorAll('video'));
+        await Promise.all(
+          videos.map(v =>
+            v.readyState >= 2
+              ? Promise.resolve()
+              : new Promise(res => {
+                  v.onloadeddata = v.onerror = res;
+                  setTimeout(res, 2000); // Timeout for videos
+                })
+          )
+        );
+      });
+    } catch {
+      // Ignore media wait errors
+    }
+
+    // ⬆️ back to top
+    try {
+      console.log(`[Screenshot] ⬆️  Resetting view to top...`);
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await new Promise(r => setTimeout(r, 1000)); // Wait for header to reset
+    } catch {
+      // Ignore
+    }
+
+    if (pageClosed || page.isClosed()) {
+      throw new Error('PAGE_CLOSED');
+    }
+
+    // 📸 screenshot
+    // console.log(`[Screenshot] 📸 Capturing final image...`);
+    try {
+      const buffer = await page.screenshot(fullPage ? {
+        fullPage: true, 
+        type: 'webp', // WebP is faster and smaller
+        quality: 70,
+        captureBeyondViewport: true,
+      } : { fullPage: false, type: 'webp', quality: 70 });
+
+      if (!buffer || buffer.length === 0) {
+        throw new Error('Generated empty screenshot buffer');
+      }
+      return buffer;
+
+    } catch (e) {
+      console.log(`[Screenshot] ⚠️ Full page screenshot failed (${e.message}), capturing viewport only...`);
+      return await page.screenshot({
+        fullPage: false,
+        type: 'webp',
+        quality: 70,
+      });
+    }
+  };
+
+  try {
+    console.log(`[Screenshot] Attempting ${type} capture for ${url}`);
+
+    let ua;
+    if (type === 'mobile') {
+      ua = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile Safari/604.1';
+    } else {
+      ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+    }
+
+    // 1️⃣ Attempt 1: Standard (Scroll + FullPage)
+    let screenshot = await attemptScreenshot(ua, { scroll: true, fullPage: true });
+
+    // 📏 Size Check & Optimization (Target: ~2MB)
+    const MAX_SIZE_BYTES = 2.5 * 1024 * 1024; // 2.5MB soft limit
+    const DANGER_LIMIT = 9 * 1024 * 1024; // 9MB hard limit (MongoDB safety)
+
+    if (screenshot.length > MAX_SIZE_BYTES) {
+      console.warn(`[Screenshot] ⚠️ Image size ${(screenshot.length / 1024 / 1024).toFixed(2)}MB exceeds target. Compressing...`);
+      
+      // Attempt 2: Aggressive Compression (Quality 30)
+      try {
+        screenshot = await page.screenshot({ fullPage: true, type: 'webp', quality: 30, captureBeyondViewport: true });
+      } catch (e) { console.warn('Compression attempt failed', e); }
+
+      if (screenshot.length > MAX_SIZE_BYTES) {
+         console.warn(`[Screenshot] ⚠️ Still large (${(screenshot.length / 1024 / 1024).toFixed(2)}MB). Maximizing compression...`);
+         // Attempt 3: Max Compression (Quality 10)
+         try {
+            screenshot = await page.screenshot({ fullPage: true, type: 'webp', quality: 10, captureBeyondViewport: true });
+         } catch (e) { console.warn('Max compression failed', e); }
+      }
+
+      // Final Fallback: Safe Mode if still dangerously huge for MongoDB
+      if (screenshot.length > DANGER_LIMIT) {
+        console.warn(`[Screenshot] ⚠️ Image (${(screenshot.length / 1024 / 1024).toFixed(2)}MB) too large for DB. Falling back to Safe Mode (Viewport)...`);
+        if (browser) await browser.close().catch(() => {});
+        // Re-launch or just re-use if active, but attemptScreenshot handles new page if needed, 
+        // actually we need to call the helper which expects browser to be open or handles it.
+        // Since we closed browser above to clear memory, we need to restart logic or just use viewport on current page if open?
+        // The helper 'attemptScreenshot' launches browser. So we are good.
+        screenshot = await attemptScreenshot(ua, { scroll: false, fullPage: false });
+      }
+    }
+
+    if (!screenshot || screenshot.length === 0) {
+      throw new Error('Empty screenshot buffer');
+    }
+
+    console.log(`[Screenshot] ✅ ${type} screenshot captured successfully for ${url}`);
+    res.set('Content-Type', 'image/webp');
+    return res.send(screenshot);
+
+  } catch (err) {
+    console.warn(`[Screenshot] ${type} failed for ${url}: ${err.message}`);
+    console.warn('[Screenshot] 🔄 Retrying with Light Mode (No Scroll, FullPage)...');
+
+    try {
+      if (browser) await browser.close();
+      pageClosed = false;
+
+      let ua;
+      if (type === 'mobile') {
+        ua = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile Safari/604.1';
+      } else {
+        ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+      }
+
+      // 2️⃣ Attempt 2: Light Mode (No Manual Scroll + FullPage) - Prevents OOM on heavy sites
+      const screenshot = await attemptScreenshot(ua, { scroll: false, fullPage: true });
+
+      console.log(`[Screenshot] ✅ Light Mode successful for ${url}`);
+      res.set('Content-Type', 'image/webp');
+      return res.send(screenshot);
+
+    } catch (retryErr) {
+      console.error(`[Screenshot] Light Mode failed for ${url}: ${retryErr.message}`);
+      console.warn('[Screenshot] ⚠️ All full-page attempts failed. Trying Safe Mode (Viewport only)...');
+
+      try {
+        if (browser) await browser.close();
+        pageClosed = false;
+        
+        // 🛡️ Safe Mode: Desktop UA, No Scroll, Viewport Only
+        let ua;
+        if (type === 'mobile') {
+          ua = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile Safari/604.1';
+        } else {
+          ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+        }
+
+        // 3️⃣ Attempt 3: Safe Mode (Viewport Only)
+        const safeScreenshot = await attemptScreenshot(ua, { scroll: false, fullPage: false });
+        
+        console.log(`[Screenshot] ✅ Safe Mode screenshot captured for ${url}`);
+        res.set('Content-Type', 'image/webp');
+        return res.send(safeScreenshot);
+      } catch (safeErr) {
+        return res.status(422).json({
+          success: false,
+          reason: 'SITE_BLOCKED',
+          message: 'Unable to capture screenshot. Site may be blocking automated access.',
+          url,
+        });
+      }
+    }
   } finally {
     if (browser) {
-      await browser.close();
+      await browser.close().catch(() => {});
     }
   }
 });
+
+
 
 // ==================== SERVER START ====================
 

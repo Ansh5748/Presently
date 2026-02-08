@@ -32,6 +32,7 @@ const pinSchema = new mongoose.Schema({
     required: true
   },
   description: String,
+  device: String,
   createdAt: {
     type: Date,
     default: Date.now

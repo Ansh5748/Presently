@@ -17,9 +17,10 @@ export interface Pin {
   pageId: string; // Link pin to a specific page
   x: number; // Percentage 0-100
   y: number; // Percentage 0-100
-  number: number;
   title: string;
   description: string;
+  number: number;
+  device?: 'desktop' | 'mobile';
 }
 
 export interface Project {

@@ -165,10 +165,10 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ onClose, o
     <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 backdrop-blur-sm p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-6 rounded-t-2xl">
+        <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-4 md:p-6 rounded-t-2xl z-10">
           <div className="flex justify-between items-start">
             <div>
-              <h2 className="text-2xl font-bold flex items-center gap-2">
+              <h2 className="text-xl md:text-2xl font-bold flex items-center gap-2">
                 <Sparkles size={24} />
                 Unlock Unlimited Projects
               </h2>
@@ -181,7 +181,7 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ onClose, o
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-6">
+        <div className="p-4 md:p-6 space-y-6">
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
               {error}

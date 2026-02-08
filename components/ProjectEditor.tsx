@@ -3,7 +3,7 @@ import { ApiService } from '../services/apiService';
 import { fetchScreenshotAsBase64 } from '../services/screenshotService';
 import { refineText } from '../services/geminiService';
 import { Project, Pin, ProjectStatus, ProjectPage } from '../types';
-import { ArrowLeft, Share2, Sparkles, X, MapPin, Eye, Loader2, Image as ImageIcon, Trash2, Layout, Link as LinkIcon, Pencil } from 'lucide-react';
+import { ArrowLeft, Share2, Sparkles, X, MapPin, Eye, Loader2, Image as ImageIcon, Trash2, Layout, Link as LinkIcon, Pencil, Monitor, Smartphone, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface ProjectEditorProps {
   projectId: string;
@@ -16,13 +16,17 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
   const [project, setProject] = useState<Project | null>(null);
   const [pins, setPins] = useState<Pin[]>([]);
   const [activePageId, setActivePageId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'desktop' | 'mobile'>('desktop');
   
   const [selectedPinId, setSelectedPinId] = useState<string | null>(null);
   const [isEditingPin, setIsEditingPin] = useState(false);
   const [tempPin, setTempPin] = useState<Partial<Pin> | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [isFetchingUrl, setIsFetchingUrl] = useState(false);
+  const [isFetchingMobile, setIsFetchingMobile] = useState(false);
+  const [loadingStep, setLoadingStep] = useState('');
   const [loading, setLoading] = useState(true);
+  const [showMobileScreens, setShowMobileScreens] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
@@ -49,8 +53,15 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
     }
   };
 
+  useEffect(() => {
+    // Auto-fetch mobile screenshot if we switch pages while in mobile view
+    if (viewMode === 'mobile' && activePage && activePage.originalUrl && !(activePage as any).mobileImageUrl && !isFetchingMobile) {
+      handleViewModeChange('mobile');
+    }
+  }, [activePageId]);
+
   const activePage = project?.pages.find(p => p.id === activePageId);
-  const activePins = pins.filter(p => p.pageId === activePageId);
+  const activePins = pins.filter(p => p.pageId === activePageId && (p.device === viewMode || (!p.device && viewMode === 'desktop')));
 
   function normalizePageName(input: string, projectBaseUrl?: string): string {
     let raw = input.trim().toLowerCase();
@@ -99,7 +110,8 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
           x: tempPin.x!,
           y: tempPin.y!,
           title: tempPin.title!,
-          description: tempPin.description || ''
+          description: tempPin.description || '',
+          device: viewMode
         });
       }
 
@@ -173,13 +185,52 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
     fileInputRef.current?.click();
   };
 
+  // Simulate backend progress for user feedback
+  const simulateLoadingSteps = () => {
+    const steps = [
+      '🚀 Launching browser...',
+      '🌍 Navigating to site...',
+      '⏳ Waiting for DOM content...',
+      '📜 Scrolling to trigger lazy content...',
+      '⏱️  Waiting for network idle...',
+      '🖼️  Verifying media loaded...',
+      '📸 Capturing final image...',
+      '⚠️ Heavy page detected, retrying...',
+      '🔄 Attempting alternative capture method...'
+    ];
+    setLoadingStep(steps[0]);
+    let stepIndex = 0;
+    const interval = setInterval(() => {
+      stepIndex = (stepIndex + 1) % steps.length;
+      if (stepIndex < steps.length) setLoadingStep(steps[stepIndex]);
+    }, 3500);
+    return interval;
+  };
+
+  const fetchDeviceScreenshot = async (url: string, device: 'desktop' | 'mobile') => {
+    // Use the backend directly to specify device type
+    // Add timestamp to prevent caching (Fix for 304 Not Modified issues)
+    const response = await fetch(`${import.meta.env.VITE_API_URL}/take?url=${encodeURIComponent(url)}&type=${device}&t=${Date.now()}`);
+    if (!response.ok) {
+      throw new Error('Failed to capture screenshot');
+    }
+    const blob = await response.blob();
+    return new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.readAsDataURL(blob);
+    });
+  };
+
   const handleAddFromUrl = async () => {
     const url = prompt("Enter the URL of the page you want to capture:");
     if (!url || !project) return;
 
     setIsFetchingUrl(true);
+    const interval = simulateLoadingSteps();
+
     try {
-      const screenshotBase64 = await fetchScreenshotAsBase64(url);
+      const screenshotBase64 = await fetchDeviceScreenshot(url, 'desktop');
       const name = normalizePageName(url, project.websiteUrl);
       
       const newPage = await ApiService.addPage(project.id, {
@@ -195,6 +246,8 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       alert("Failed to capture screenshot. Please check the URL and ensure the screenshot service is running.");
     } finally {
       setIsFetchingUrl(false);
+      setLoadingStep('');
+      clearInterval(interval);
     }
   };
 
@@ -254,8 +307,10 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         : newNameInput.trim();
 
       setIsFetchingUrl(true);
+      const interval = simulateLoadingSteps();
+
       try {
-        const newScreenshotBase64 = await fetchScreenshotAsBase64(finalUrl);
+        const newScreenshotBase64 = await fetchDeviceScreenshot(finalUrl, 'desktop');
         
         await ApiService.updatePage(project.id, page.id, {
           name: finalName,
@@ -273,6 +328,8 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         alert("Failed to update screenshot. Please check the URL and ensure the screenshot service is running.");
       } finally {
         setIsFetchingUrl(false);
+        setLoadingStep('');
+        clearInterval(interval);
       }
     } else {
       const newNameInput = prompt("Enter a new name for this page:", page.name);
@@ -320,6 +377,41 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
     }
   };
 
+  const handleViewModeChange = async (mode: 'desktop' | 'mobile') => {
+    setViewMode(mode);
+    
+    // If switching to mobile and we don't have the mobile screenshot yet, fetch it
+    if (mode === 'mobile' && activePage && activePage.originalUrl && !(activePage as any).mobileImageUrl) {
+      setIsFetchingUrl(true);
+      setIsFetchingMobile(true);
+      const interval = simulateLoadingSteps();
+      
+      try {
+        const mobileScreenshot = await fetchDeviceScreenshot(activePage.originalUrl, 'mobile');
+        
+        // Save the mobile screenshot to the page
+        await ApiService.updatePage(project!.id, activePage.id, {
+          mobileImageUrl: mobileScreenshot
+        } as any);
+        
+        // Update local state immediately to show the image
+        setProject(prev => prev ? {
+          ...prev,
+          pages: prev.pages.map(p => p.id === activePage.id ? { ...p, mobileImageUrl: mobileScreenshot } : p)
+        } : null);
+
+      } catch (error) {
+        alert("Failed to capture mobile screenshot.");
+        setViewMode('desktop'); // Revert on failure
+      } finally {
+        setIsFetchingUrl(false);
+        setIsFetchingMobile(false);
+        setLoadingStep('');
+        clearInterval(interval);
+      }
+    }
+  };
+
   if (loading || !project) return (
     <div className="flex items-center justify-center h-screen">
       <Loader2 size={32} className="animate-spin text-slate-400" />
@@ -342,6 +434,25 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
           </div>
         </div>
         <div className="flex gap-2 md:gap-3 mt-2 md:mt-0 w-full md:w-auto justify-end">
+          <div className="flex bg-slate-100 p-1 rounded-lg mr-2">
+            <button
+              onClick={() => handleViewModeChange('desktop')}
+              className={`p-2 rounded-md transition-all ${viewMode === 'desktop' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
+              title="Desktop View"
+              disabled={isFetchingMobile}
+            >
+              <Monitor size={18} />
+            </button>
+            <button
+              onClick={() => handleViewModeChange('mobile')}
+              className={`p-2 rounded-md transition-all ${viewMode === 'mobile' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
+              title="Mobile View"
+              disabled={isFetchingMobile}
+            >
+              <Smartphone size={18} />
+            </button>
+          </div>
+
           <button
             onClick={() => window.open(`/draft/${project.id}`, '_blank')}
             className="flex items-center gap-2 text-slate-600 hover:text-slate-900 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
@@ -371,12 +482,18 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       </header>
 
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
-        <div className="w-full md:w-64 bg-white border-b md:border-r md:border-b-0 border-slate-200 flex flex-col z-10">
-          <div className="p-4 border-b border-slate-100 flex justify-between items-center">
-            <h2 className="font-bold text-slate-700 flex items-center gap-2 text-sm">
+        <div className="w-full md:w-64 bg-white border-b md:border-r md:border-b-0 border-slate-200 flex flex-col z-30 relative">
+          <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-white z-20">
+            <button 
+              onClick={() => setShowMobileScreens(!showMobileScreens)}
+              className="font-bold text-slate-700 flex items-center gap-2 text-sm md:cursor-default"
+            >
               <Layout size={16} />
               Screens
-            </h2>
+              <span className="md:hidden text-slate-400 ml-1">
+                {showMobileScreens ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              </span>
+            </button>
             
             <div className="flex items-center gap-1">
               <input 
@@ -403,13 +520,20 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
             </div>
           </div>
           
-          <div className="flex-1 overflow-x-auto md:overflow-y-auto p-3">
+          <div className={`
+            md:flex-1 md:static md:block md:bg-transparent md:shadow-none md:w-auto md:max-h-none md:overflow-y-auto p-3 transition-all duration-200
+            ${showMobileScreens ? 'absolute top-full left-0 w-full bg-white shadow-xl overflow-x-auto border-b border-slate-200' : 'hidden'}
+          `}>
             {isFetchingUrl && (
               <div className="p-3 text-center text-xs text-slate-500 bg-slate-50 rounded animate-pulse">
-                Fetching screenshot...
+                <div className="flex items-center justify-center gap-2 mb-1">
+                  <Loader2 size={14} className="animate-spin" />
+                  <span>Fetching screenshot...</span>
+                </div>
+                <div className="text-[10px] text-slate-400">{loadingStep}</div>
               </div>
             )}
-            <div className="flex md:flex-col space-x-3 md:space-x-0 md:space-y-3">
+            <div className="flex flex-row md:flex-col space-x-3 md:space-x-0 md:space-y-3">
             {project.pages.map((page) => (
               <div 
                 key={page.id}
@@ -459,16 +583,24 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
 
         <main className="flex-1 overflow-auto p-4 md:p-8 relative flex justify-center bg-slate-100/50">
           {activePage ? (
+            <div className={`transition-all duration-300 ${viewMode === 'mobile' ? 'w-[375px] h-[667px] overflow-y-auto border-4 border-slate-800 rounded-[2rem] shadow-2xl bg-slate-800 scrollbar-hide' : 'w-full max-w-[1000px]'}`}>
             <div 
               className="relative bg-white shadow-xl rounded-lg overflow-hidden select-none border border-slate-200 transition-all duration-300 flex flex-col"
-              style={{ width: '100%', maxWidth: '1000px', cursor: 'crosshair', minHeight: '600px', height: 'fit-content' }}
+              style={{ width: '100%', cursor: 'crosshair', minHeight: viewMode === 'mobile' ? 'unset' : '600px', height: 'fit-content' }}
               onClick={handleImageClick}
             >
-              {activePage.imageUrl ? (
+              {/* {activePage.imageUrl ? ( */}
+              {viewMode === 'mobile' && isFetchingMobile ? (
+                <div className="flex flex-col items-center justify-center h-[600px] bg-slate-50 text-slate-400">
+                  <Loader2 size={32} className="animate-spin mb-4 text-blue-500" />
+                  <p className="font-medium text-slate-600">Generating Mobile View...</p>
+                  <p className="text-xs mt-2 text-slate-400 max-w-[200px] text-center">{loadingStep}</p>
+                </div>
+              ) : activePage.imageUrl ? (
                 <>
                   <img 
                     ref={imageRef}
-                    src={activePage.imageUrl} 
+                    src={viewMode === 'mobile' ? ((activePage as any).mobileImageUrl || activePage.imageUrl) : activePage.imageUrl} 
                     alt={activePage.name} 
                     className="w-full h-auto block"
                     draggable={false}
@@ -510,6 +642,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
                   </div>
                 </div>
               )}
+            </div>
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center h-full text-slate-400">

@@ -13,6 +13,7 @@ const projectPageSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  mobileImageUrl: String,
   originalUrl: String,
   details: String
 }, { _id: false });

@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ApiService } from '../services/apiService';
 import { Project, Pin, ProjectPage } from '../types';
-import { Loader2, Layout, MessageSquare } from 'lucide-react';
+import logoImg from '../src/assets/presently_logo.png';
+import { Loader2, Layout, MessageSquare, Monitor, Smartphone } from 'lucide-react';
 
 interface DeliveryViewProps {
   projectId: string;
@@ -15,6 +16,7 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
   const [activePageId, setActivePageId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [isEditingDetails, setIsEditingDetails] = useState(false);
+  const [viewMode, setViewMode] = useState<'desktop' | 'mobile'>('desktop');
   const imageContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -84,7 +86,7 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
   };
 
   const activePage = project?.pages.find(p => p.id === activePageId);
-  const activePins = pins.filter(p => p.pageId === activePageId);
+  const activePins = pins.filter(p => p.pageId === activePageId && (p.device === viewMode || (!p.device && viewMode === 'desktop')));
 
   const pageSlug = (activePage as any)?.originalUrl?.toLowerCase().replace(/\s/g, '-') || "";
   const websiteUrl = (project as any)?.websiteUrl;
@@ -118,12 +120,28 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
       {/* Navigation / Brand Bar (Minimal) */}
       <nav className="bg-white border-b border-slate-200 sticky top-0 z-30 px-4 md:px-6 py-3 md:py-4 flex justify-between items-center shadow-sm flex-none">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-slate-900 rounded-lg flex items-center justify-center text-white font-bold">P</div>
+          <img src={logoImg} alt="Logo" className="h-12 w-auto object-contain" />
           <div className="h-6 w-px bg-slate-200"></div>
           <span className="font-semibold text-slate-900">{project.name}</span>
         </div>
         <div className="text-sm text-slate-500 text-right">
           Prepared for <span className="font-semibold text-slate-900">{project.clientName || 'Client'}</span>
+        </div>
+        <div className="flex bg-slate-100 p-1 rounded-lg ml-4">
+          <button
+            onClick={() => setViewMode('desktop')}
+            className={`p-2 rounded-md transition-all ${viewMode === 'desktop' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
+            title="Desktop View"
+          >
+            <Monitor size={18} />
+          </button>
+          <button
+            onClick={() => setViewMode('mobile')}
+            className={`p-2 rounded-md transition-all ${viewMode === 'mobile' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
+            title="Mobile View"
+          >
+            <Smartphone size={18} />
+          </button>
         </div>
       </nav>
 
@@ -229,7 +247,7 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
 
         {/* Right Column: Visuals */}
         <div className="lg:w-2/3">
-          <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden relative">
+          <div className={`bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden relative transition-all duration-300 mx-auto ${viewMode === 'mobile' ? 'max-w-[375px]' : 'w-full'}`}>
             <div className="bg-slate-100 border-b border-slate-200 px-4 py-2 flex items-center gap-2">
               <div className="flex gap-1.5">
                 <div className="w-3 h-3 rounded-full bg-red-400"></div>
@@ -245,7 +263,11 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
             <div ref={imageContainerRef} className="relative max-h-[80vh] overflow-y-auto">
               {activePage ? (
                 <div className="relative">
-                  <img src={activePage.imageUrl} alt={activePage.name} className="w-full h-auto block" />
+                  <img 
+                    src={viewMode === 'mobile' ? ((activePage as any).mobileImageUrl || activePage.imageUrl) : activePage.imageUrl} 
+                    alt={activePage.name} 
+                    className="w-full h-auto block" 
+                  />
 
                   {/* Pins Overlay */}
                   {activePins.map(pin => (
