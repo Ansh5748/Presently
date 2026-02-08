@@ -81,17 +81,20 @@ const compressBase64 = async (base64String) => {
   try {
     browser = await puppeteer.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage','--single-process','--no-zygote'],
       protocolTimeout: 60000
     });
     const page = await browser.newPage();
     
-    await page.setContent(`<html><body style="margin:0;padding:0;"><img id="img" src="${base64String}" /></body></html>`);
+    await page.setContent(`<html><body style="margin:0;padding:0;overflow:hidden;"><img id="img" src="${base64String}" style="max-width:100%;" /></body></html>`);
     const img = await page.$('#img');
     const box = await img.boundingBox();
 
     if (box) {
-      await page.setViewport({ width: Math.ceil(box.width), height: Math.ceil(box.height) });
+      // Limit viewport to prevent OOM on massive images
+      const width = Math.min(Math.ceil(box.width), 1920);
+      const height = Math.min(Math.ceil(box.height), 10000); 
+      await page.setViewport({ width, height });
       
       // Try progressive quality reduction
       let buffer = await page.screenshot({ type: 'webp', quality: 50, fullPage: true });
@@ -104,11 +107,16 @@ const compressBase64 = async (base64String) => {
          buffer = await page.screenshot({ type: 'webp', quality: 5, fullPage: true });
       }
 
+      if (buffer.length === 0) {
+        console.warn('[Compression] Generated empty buffer, returning original.');
+        return base64String;
+      }
       console.log(`[Compression] Reduced to ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
       return `data:image/webp;base64,${buffer.toString('base64')}`;
     }
   } catch (error) {
     console.error('[Compression] Failed:', error.message);
+    return base64String;
   } finally {
     if (browser) await browser.close().catch(() => {});
   }
@@ -1170,6 +1178,17 @@ app.get('/take', async (req, res) => {
     } catch {
       // Ignore media wait errors
     }
+
+    // 📏 Cap height to prevent OOM on infinite scroll pages (e.g. mobile views)
+    if (scroll) try {
+      await page.evaluate(() => {
+        const maxH = 15000; // 15k pixels max height
+        if (document.body.scrollHeight > maxH) {
+            document.body.style.height = maxH + 'px';
+            document.body.style.overflow = 'hidden';
+        }
+      });
+    } catch (e) {}
 
     // ⬆️ back to top
     try {
