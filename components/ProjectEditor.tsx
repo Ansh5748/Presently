@@ -482,7 +482,8 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
           </div>
         </div>
         <div className="flex gap-2 md:gap-3 mt-2 md:mt-0 w-full md:w-auto justify-end">
-          <div className="flex bg-slate-100 p-1 rounded-lg mr-2">
+          <div className="flex bg-slate-100 p-1 rounded-lg mr-2 md:static absolute top-3 right-4
+                md:flex">
             <button
               onClick={() => handleViewModeChange('desktop')}
               className={`p-2 rounded-md transition-all ${viewMode === 'desktop' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
