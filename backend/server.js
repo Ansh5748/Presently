@@ -76,7 +76,10 @@ function authenticateToken(req, res, next) {
   if (!token) return res.sendStatus(401);
 
   jwt.verify(token, ACCESS_TOKEN_SECRET, (err, user) => {
-    if (err) return res.sendStatus(403);
+    if (err) {
+      console.error('[Auth] Token verification failed:', err.message);
+      return res.sendStatus(403);
+    }
     req.user = user;
     next();
   });
@@ -882,7 +885,7 @@ app.get('/take', async (req, res) => {
     console.log(`[Screenshot] ⚙️  Config: ${isProd ? 'Production' : 'Development'} | UA: ${type} | Mode: ${scroll ? 'Full' : 'Safe'}`);
 
     const launchOptions = {
-      headless: "new",
+      headless: true,
       protocolTimeout: 240000, 
       ignoreHTTPSErrors: true, // Ignore SSL certificate errors
       ignoreDefaultArgs: ['--enable-automation'],
@@ -904,10 +907,12 @@ app.get('/take', async (req, res) => {
         '--use-fake-ui-for-media-stream',
         '--use-fake-device-for-media-stream',
         '--enable-features=NetworkService',
-        '--disable-accelerated-2d-canvas', // Improves stability
-        '--disable-gl-drawing-for-tests',
-        '--disable-canvas-aa',
-        ...(isProd ? ['--single-process'] : [])
+        ...(isProd ? [
+          '--disable-accelerated-2d-canvas',
+          '--disable-gl-drawing-for-tests',
+          '--disable-canvas-aa',
+          '--single-process'
+        ] : [])
       ],
     };
 

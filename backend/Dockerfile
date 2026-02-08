@@ -12,7 +12,8 @@ WORKDIR /usr/src/app
 # Switch to root to install dependencies
 USER root
 
-COPY package*.json ./
+COPY package.json ./
+# Skip package-lock.json to avoid version mismatches and corruption
 RUN npm install
 
 COPY . .

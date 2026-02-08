@@ -242,7 +242,12 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       const updatedProject = await ApiService.getProject(project.id);
       setProject(updatedProject);
       setActivePageId(newPage.id);
-    } catch (error) {
+    } catch (error: any) {
+      if (error.status === 403 || (error.response && error.response.status === 403)) {
+        alert("Session expired. Please log in again.");
+        onNavigate('/login');
+        return;
+      }
       alert("Failed to capture screenshot. Please check the URL and ensure the screenshot service is running.");
     } finally {
       setIsFetchingUrl(false);
@@ -324,7 +329,12 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
 
         const updatedPins = await ApiService.getPins(project.id);
         setPins(updatedPins);
-      } catch (error) {
+      } catch (error: any) {
+        if (error.status === 403 || (error.response && error.response.status === 403)) {
+          alert("Session expired. Please log in again.");
+          onNavigate('/login');
+          return;
+        }
         alert("Failed to update screenshot. Please check the URL and ensure the screenshot service is running.");
       } finally {
         setIsFetchingUrl(false);
