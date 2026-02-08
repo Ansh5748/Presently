@@ -92,7 +92,25 @@ const compressBase64 = async (base64String) => {
     });
     const page = await browser.newPage();
     
-    await page.setContent(`<html><body style="margin:0;padding:0;overflow:hidden;"><img id="img" src="${base64String}" style="display:block;;max-width:100%;" /></body></html>`, { waitUntil: 'load' });
+    // await page.setContent(`<html><body style="margin:0;padding:0;overflow:hidden;"><img id="img" src="${base64String}" style="display:block;;max-width:100%;" /></body></html>`, { waitUntil: 'load' });
+    // Safer way to load large base64 image to prevent "0.00MB" errors
+    await page.goto('about:blank');
+    await page.evaluate((b64) => {
+        return new Promise((resolve, reject) => {
+            const img = document.createElement('img');
+            img.id = 'img';
+            img.style.display = 'block';
+            img.style.maxWidth = '100%';
+            img.onload = () => resolve();
+            img.onerror = (e) => reject(new Error('Image load failed'));
+            img.src = b64;
+            document.body.style.margin = '0';
+            document.body.style.padding = '0';
+            document.body.style.overflow = 'hidden';
+            document.body.appendChild(img);
+        });
+    }, base64String);
+
     const img = await page.$('#img');
     const box = await img.boundingBox();
 
@@ -110,7 +128,8 @@ const compressBase64 = async (base64String) => {
       }
       
       if (buffer.length > MAX_SIZE) {
-         buffer = await page.screenshot({ type: 'webp', quality: 5, fullPage: false });
+         await page.evaluate(() => { document.body.style.zoom = '0.7'; });
+         buffer = await page.screenshot({ type: 'webp', quality: 20, fullPage: false });
       }
 
       if (buffer.length === 0) {
@@ -979,12 +998,12 @@ app.get('/take', async (req, res) => {
       // // Attempt 3: Max Compression (Quality 10)
       // compressed = await page.screenshot({ fullPage: true, type: 'webp', quality: 10, captureBeyondViewport: true });
       
-      // Attempt 3: Scale down the page (Zoom 0.5) + Quality 30
+      // Attempt 3: Scale down the page (Zoom 0.6) + Quality 30
       await page.evaluate(() => {
-        document.body.style.zoom = '0.5';
+        document.body.style.zoom = '0.6';
       });
       // Wait for layout to settle
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 300));
 
       compressed = await page.screenshot({ fullPage: true, type: 'webp', quality: 30 });
       if (compressed.length <= HARD_LIMIT_BYTES) return compressed;
@@ -994,11 +1013,11 @@ app.get('/take', async (req, res) => {
       // return await page.screenshot({ fullPage: false, type: 'webp', quality: 70 });
       
       // Final Fallback: Crop height to ensure it fits (Safe Mode)
-      console.warn(`[Screenshot] ⚠️ Image still too large. Cropping to safe height...`);
+      console.warn(`[Screenshot] ⚠️ Image still too large (${(compressed.length / 1024 / 1024).toFixed(2)}MB). Cropping to safe height...`);
       const viewport = page.viewport();
       return await page.screenshot({ 
           type: 'webp', 
-          quality: 20,
+          quality: 10,
           fullPage: false,
           clip: { x: 0, y: 0, width: viewport.width, height: Math.min(5000, viewport.height) }
       });
