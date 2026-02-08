@@ -81,30 +81,36 @@ const compressBase64 = async (base64String) => {
   try {
     browser = await puppeteer.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage','--single-process','--no-zygote'],
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox', 
+        '--disable-dev-shm-usage',
+        '--single-process',
+        '--no-zygote'
+      ],
       protocolTimeout: 60000
     });
     const page = await browser.newPage();
     
-    await page.setContent(`<html><body style="margin:0;padding:0;overflow:hidden;"><img id="img" src="${base64String}" style="max-width:100%;" /></body></html>`);
+    await page.setContent(`<html><body style="margin:0;padding:0;overflow:hidden;"><img id="img" src="${base64String}" style="display:block;;max-width:100%;" /></body></html>`, { waitUntil: 'load' });
     const img = await page.$('#img');
     const box = await img.boundingBox();
 
     if (box) {
-      // Limit viewport to prevent OOM on massive images
-      const width = Math.min(Math.ceil(box.width), 1920);
-      const height = Math.min(Math.ceil(box.height), 10000); 
+      // Set viewport to match image dimensions exactly
+      const width = Math.ceil(box.width);
+      const height = Math.ceil(box.height);
       await page.setViewport({ width, height });
       
       // Try progressive quality reduction
-      let buffer = await page.screenshot({ type: 'webp', quality: 50, fullPage: true });
+      let buffer = await page.screenshot({ type: 'webp', quality: 50, fullPage: false });
       
       if (buffer.length > TARGET_SIZE) {
-         buffer = await page.screenshot({ type: 'webp', quality: 25, fullPage: true });
+         buffer = await page.screenshot({ type: 'webp', quality: 25, fullPage: false });
       }
       
       if (buffer.length > MAX_SIZE) {
-         buffer = await page.screenshot({ type: 'webp', quality: 5, fullPage: true });
+         buffer = await page.screenshot({ type: 'webp', quality: 5, fullPage: false });
       }
 
       if (buffer.length === 0) {
@@ -965,20 +971,37 @@ app.get('/take', async (req, res) => {
     
     try {
       // Attempt 2: Aggressive Compression (Quality 20)
-      let compressed = await page.screenshot({ fullPage: true, type: 'webp', quality: 20, captureBeyondViewport: true });
+      let compressed = await page.screenshot({ fullPage: true, type: 'webp', quality: 20 });
       
       if (compressed.length <= TARGET_SIZE_BYTES) return compressed;
 
-      console.warn(`[Screenshot] ⚠️ Still large (${(compressed.length / 1024 / 1024).toFixed(2)}MB). Maximizing compression...`);
-      // Attempt 3: Max Compression (Quality 10)
-      compressed = await page.screenshot({ fullPage: true, type: 'webp', quality: 10, captureBeyondViewport: true });
+      console.warn(`[Screenshot] ⚠️ Still large (${(compressed.length / 1024 / 1024).toFixed(2)}MB). Resizing page...`);
+      // // Attempt 3: Max Compression (Quality 10)
+      // compressed = await page.screenshot({ fullPage: true, type: 'webp', quality: 10, captureBeyondViewport: true });
       
+      // Attempt 3: Scale down the page (Zoom 0.5) + Quality 30
+      await page.evaluate(() => {
+        document.body.style.zoom = '0.5';
+      });
+      // Wait for layout to settle
+      await new Promise(r => setTimeout(r, 500));
+
+      compressed = await page.screenshot({ fullPage: true, type: 'webp', quality: 30 });
       if (compressed.length <= HARD_LIMIT_BYTES) return compressed;
 
       // Final Fallback: Viewport Only
-      console.warn(`[Screenshot] ⚠️ Image (${(compressed.length / 1024 / 1024).toFixed(2)}MB) still too large. Falling back to Viewport Only...`);
-      return await page.screenshot({ fullPage: false, type: 'webp', quality: 70 });
+      // console.warn(`[Screenshot] ⚠️ Image (${(compressed.length / 1024 / 1024).toFixed(2)}MB) still too large. Falling back to Viewport Only...`);
+      // return await page.screenshot({ fullPage: false, type: 'webp', quality: 70 });
       
+      // Final Fallback: Crop height to ensure it fits (Safe Mode)
+      console.warn(`[Screenshot] ⚠️ Image still too large. Cropping to safe height...`);
+      const viewport = page.viewport();
+      return await page.screenshot({ 
+          type: 'webp', 
+          quality: 20,
+          fullPage: false,
+          clip: { x: 0, y: 0, width: viewport.width, height: Math.min(5000, viewport.height) }
+      });
     } catch (e) {
       console.warn('[Screenshot] Compression attempt failed', e);
       return buffer; // Return original if compression fails
