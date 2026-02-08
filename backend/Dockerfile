@@ -1,11 +1,9 @@
 FROM ghcr.io/puppeteer/puppeteer:latest
 
 # Set environment variables
-# Skip downloading Chrome since we use the installed one
-# Set executable path for Puppeteer to find Chrome
-# Set NODE_ENV to production
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable \
+# 1. Do NOT skip download. Let Puppeteer download the correct Chrome version.
+# 2. Set cache dir to a folder inside the app so we can manage permissions.
+ENV PUPPETEER_CACHE_DIR=/usr/src/app/.cache \
     NODE_ENV=production
 
 WORKDIR /usr/src/app
@@ -14,10 +12,13 @@ WORKDIR /usr/src/app
 USER root
 
 COPY package.json ./
-# Skip package-lock.json to avoid version mismatches and corruption
+# Install dependencies AND download Chrome to .cache
 RUN npm install
 
 COPY . .
+
+# Ensure pptruser owns the app and the downloaded browser cache
+RUN chown -R pptruser:pptruser /usr/src/app
 
 # Switch back to non-privileged user for security
 USER pptruser
