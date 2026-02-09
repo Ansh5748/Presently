@@ -47,7 +47,12 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
 
       const pinsData = await ApiService.getPins(projectId);
       setPins(pinsData);
-    } catch (error) {
+    } catch (error: any) {
+      if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
+        StorageService.clearUser();
+        onNavigate('/login');
+        return;
+      }
       onNavigate('/');
     } finally {
       setLoading(false);
@@ -122,7 +127,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       setSelectedPinId(null);
       setIsEditingPin(false);
     } catch (error: any) {
-      if (error.status === 403 || (error.response && error.response.status === 403)) {
+      if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
         StorageService.clearUser();
         onNavigate('/login');
         return;
@@ -142,7 +147,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       setTempPin(null);
       setIsEditingPin(false);
     } catch (error: any) {
-      if (error.status === 403 || (error.response && error.response.status === 403)) {
+      if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
         StorageService.clearUser();
         onNavigate('/login');
         return;
@@ -169,8 +174,13 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
     try {
       const polished = await refineText(tempPin.description);
       setTempPin({ ...tempPin, description: polished });
-    } catch (error) {
-      alert('AI refinement failed');
+    } catch (error: any) {
+      if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
+        StorageService.clearUser();
+        onNavigate('/login');
+        return;
+      }
+       alert('AI refinement failed');
     } finally {
       setAiLoading(false);
     }
@@ -188,7 +198,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         : "Live version has been updated with your latest changes."
       );
     } catch (error: any) {
-      if (error.status === 403 || (error.response && error.response.status === 403)) {
+      if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
         StorageService.clearUser();
         onNavigate('/login');
         return;
@@ -259,7 +269,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       setProject(updatedProject);
       setActivePageId(newPage.id);
     } catch (error: any) {
-      if (error.status === 403 || (error.response && error.response.status === 403)) {
+      if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
         StorageService.clearUser();
         alert("Session expired. Please log in again.");
         onNavigate('/login');
@@ -292,7 +302,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
           setProject(updatedProject);
           setActivePageId(newPage.id);
         } catch (error: any) {
-          if (error.status === 403 || (error.response && error.response.status === 403)) {
+          if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
             StorageService.clearUser();
             onNavigate('/login');
             return;
@@ -352,7 +362,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         const updatedPins = await ApiService.getPins(project.id);
         setPins(updatedPins);
       } catch (error: any) {
-        if (error.status === 403 || (error.response && error.response.status === 403)) {
+        if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
           StorageService.clearUser();
           alert("Session expired. Please log in again.");
           onNavigate('/login');
@@ -375,7 +385,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         const updatedProject = await ApiService.getProject(project.id);
         setProject(updatedProject);
       } catch (error: any) {
-        if (error.status === 403 || (error.response && error.response.status === 403)) {
+        if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
           StorageService.clearUser();
           onNavigate('/login');
           return;
@@ -410,7 +420,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         const updatedPins = await ApiService.getPins(project.id);
         setPins(updatedPins);
       } catch (error: any) {
-        if (error.status === 403 || (error.response && error.response.status === 403)) {
+        if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
           StorageService.clearUser();
           onNavigate('/login');
           return;
@@ -444,7 +454,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         } : null);
 
       } catch (error: any) {
-        if (error.status === 403 || (error.response && error.response.status === 403)) {
+        if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
           StorageService.clearUser();
           onNavigate('/login');
           return;

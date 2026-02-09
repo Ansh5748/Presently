@@ -40,7 +40,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
       const projectsData = await ApiService.getProjects();
       setProjects(projectsData);
     } catch (error) {
-      if ((error as any).status === 403 || ((error as any).response && (error as any).response.status === 403)) {
+      if ((error as any).status === 401 || (error as any).status === 403 || ((error as any).response && ((error as any).response.status === 401 || (error as any).response.status === 403))) {
         StorageService.clearUser();
         onNavigate('/login');
         return;
@@ -54,7 +54,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
       const status = await ApiService.getSubscriptionStatus();
       setHasActiveSubscription(status.hasActiveSubscription);
     } catch (error) {
-      if ((error as any).status === 403 || ((error as any).response && (error as any).response.status === 403)) {
+      if ((error as any).status === 401 || (error as any).status === 403 || ((error as any).response && ((error as any).response.status === 401 || (error as any).response.status === 403))) {
         StorageService.clearUser();
         onNavigate('/login');
         return;
@@ -89,6 +89,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
       
       onNavigate(`/project/${newProject.id}`);
     } catch (error: any) {
+      if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
+        StorageService.clearUser();
+        onNavigate('/login');
+        return;
+      }
       if (error.message === 'SUBSCRIPTION_REQUIRED') {
         setIsCreating(false);
         setShowSubscriptionModal(true);
@@ -107,8 +112,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
       try {
         await ApiService.deleteProject(id);
         setProjects(projects.filter(p => p.id !== id));
-      } catch (error) {
-        alert('Failed to delete project');
+      } catch (error: any) {
+        if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
+          StorageService.clearUser();
+          onNavigate('/login');
+          return;
+        }
+         alert('Failed to delete project');
       }
     }
   };

@@ -36,8 +36,13 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
 
       const pinsData = await ApiService.getPins(projectId, view);
       setPins(pinsData);
-    } catch (error) {
-      alert('Project not found');
+    } catch (error: any) {
+      if (!isLiveView && onNavigate && (error.status === 403 || (error.response && error.response.status === 403))) {
+        StorageService.clearUser();
+        onNavigate('/login');
+        return;
+      }
+       alert('Project not found');
     } finally {
       setLoading(false);
     }
