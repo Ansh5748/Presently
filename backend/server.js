@@ -62,6 +62,71 @@ const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET;
 // Helper functions
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
+// Mutex for serializing heavy browser operations to prevent OOM
+class Mutex {
+  constructor() {
+    this._locking = Promise.resolve();
+  }
+  lock() {
+    let unlock;
+    const newLock = new Promise(resolve => unlock = resolve);
+    const previousLock = this._locking;
+    this._locking = this._locking.then(() => newLock);
+    return previousLock.then(() => unlock);
+  }
+}
+const browserMutex = new Mutex();
+
+let globalBrowser = null;
+
+const getBrowser = async () => {
+  if (globalBrowser) {
+    if (!globalBrowser.isConnected()) {
+      console.log('[Browser] Global browser disconnected. Re-launching...');
+      try { await globalBrowser.close(); } catch (e) {}
+      globalBrowser = null;
+    } else {
+      return globalBrowser;
+    }
+  }
+  
+  const isProd = process.env.NODE_ENV === 'production';
+  const launchOptions = {
+    headless: true,
+    args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage', // Always enable for stability on heavy pages
+        '--disable-gpu',
+        '--disable-blink-features=AutomationControlled',
+        '--window-size=1280,800', // Reduced from 1920x1080 to save size
+        '--disable-web-security',
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--disable-site-isolation-trials',
+        '--no-first-run',
+        '--no-zygote',
+        // Stealth additions
+        '--disable-infobars',
+        '--exclude-switches=enable-automation',
+        '--use-fake-ui-for-media-stream',
+        '--use-fake-device-for-media-stream',
+        '--enable-features=NetworkService',
+        ...(isProd ? [
+          '--disable-accelerated-2d-canvas',
+          '--disable-gl-drawing-for-tests',
+          '--disable-canvas-aa',
+          '--single-process'
+        ] : [])
+    ],
+    protocolTimeout: 120000
+  };
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+  }
+  globalBrowser = await puppeteer.launch(launchOptions);
+  return globalBrowser;
+};
+
 // Compression Helper
 const compressBase64 = async (base64String) => {
   if (!base64String || typeof base64String !== 'string' || !base64String.startsWith('data:image')) {
@@ -77,22 +142,23 @@ const compressBase64 = async (base64String) => {
 
   console.log(`[Compression] Optimizing image (${(sizeInBytes / 1024 / 1024).toFixed(2)}MB)...`);
 
-  let browser;
+  const unlock = await browserMutex.lock();
+  let page;
   try {
-    browser = await puppeteer.launch({
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox', 
-        '--disable-dev-shm-usage',
-        '--single-process',
-        '--no-zygote'
-      ],
-      protocolTimeout: 60000
-    });
-    const page = await browser.newPage();
+    // browser = await puppeteer.launch({
+    //   headless: true,
+    //   args: [
+    //     '--no-sandbox',
+    //     '--disable-setuid-sandbox', 
+    //     '--disable-dev-shm-usage',
+    //     '--single-process',
+    //     '--no-zygote'
+    //   ],
+    //   protocolTimeout: 60000
+    // });
+    // const page = await browser.newPage();
     
-    // await page.setContent(`<html><body style="margin:0;padding:0;overflow:hidden;"><img id="img" src="${base64String}" style="display:block;;max-width:100%;" /></body></html>`, { waitUntil: 'load' });
+    await page.setContent(`<html><body style="margin:0;padding:0;overflow:hidden;"><img id="img" src="${base64String}" style="display:block;;max-width:100%;" /></body></html>`, { waitUntil: 'load' });
     // Safer way to load large base64 image to prevent "0.00MB" errors
     await page.goto('about:blank');
     await page.evaluate((b64) => {
@@ -110,6 +176,10 @@ const compressBase64 = async (base64String) => {
             document.body.appendChild(img);
         });
     }, base64String);
+    const browser = await getBrowser();
+    page = await browser.newPage();
+  
+ 
 
     const img = await page.$('#img');
     const box = await img.boundingBox();
@@ -143,7 +213,9 @@ const compressBase64 = async (base64String) => {
     console.error('[Compression] Failed:', error.message);
     return base64String;
   } finally {
-    if (browser) await browser.close().catch(() => {});
+    // if (browser) await browser.close().catch(() => {});
+    if (page) await page.close().catch(() => {});
+    unlock();
   }
   return base64String;
 };
@@ -974,7 +1046,7 @@ app.get('/take', async (req, res) => {
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
 
-  let browser;
+  // let browser;
   let page;
   let pageClosed = false;
 
@@ -1033,47 +1105,48 @@ app.get('/take', async (req, res) => {
     const isProd = process.env.NODE_ENV === 'production';
     console.log(`[Screenshot] ⚙️  Config: ${isProd ? 'Production' : 'Development'} | UA: ${type} | Mode: ${scroll ? 'Full' : 'Safe'}`);
 
-    const launchOptions = {
-      headless: true,
-      protocolTimeout: 240000, 
-      ignoreHTTPSErrors: true, // Ignore SSL certificate errors
-      ignoreDefaultArgs: ['--enable-automation'],
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage', // Always enable for stability on heavy pages
-        '--disable-gpu',
-        '--disable-blink-features=AutomationControlled',
-        '--window-size=1280,800', // Reduced from 1920x1080 to save size
-        '--disable-web-security',
-        '--disable-features=IsolateOrigins,site-per-process',
-        '--disable-site-isolation-trials',
-        '--no-first-run',
-        '--no-zygote',
-        // Stealth additions
-        '--disable-infobars',
-        '--exclude-switches=enable-automation',
-        '--use-fake-ui-for-media-stream',
-        '--use-fake-device-for-media-stream',
-        '--enable-features=NetworkService',
-        ...(isProd ? [
-          '--disable-accelerated-2d-canvas',
-          '--disable-gl-drawing-for-tests',
-          '--disable-canvas-aa',
-          '--single-process'
-        ] : [])
-      ],
-    };
+    // const launchOptions = {
+    //   headless: true,
+    //   protocolTimeout: 240000, 
+    //   ignoreHTTPSErrors: true, // Ignore SSL certificate errors
+    //   ignoreDefaultArgs: ['--enable-automation'],
+    //   args: [
+    //     '--no-sandbox',
+    //     '--disable-setuid-sandbox',
+    //     '--disable-dev-shm-usage', // Always enable for stability on heavy pages
+    //     '--disable-gpu',
+    //     '--disable-blink-features=AutomationControlled',
+    //     '--window-size=1280,800', // Reduced from 1920x1080 to save size
+    //     '--disable-web-security',
+    //     '--disable-features=IsolateOrigins,site-per-process',
+    //     '--disable-site-isolation-trials',
+    //     '--no-first-run',
+    //     '--no-zygote',
+    //     // Stealth additions
+    //     '--disable-infobars',
+    //     '--exclude-switches=enable-automation',
+    //     '--use-fake-ui-for-media-stream',
+    //     '--use-fake-device-for-media-stream',
+    //     '--enable-features=NetworkService',
+    //     ...(isProd ? [
+    //       '--disable-accelerated-2d-canvas',
+    //       '--disable-gl-drawing-for-tests',
+    //       '--disable-canvas-aa',
+    //       '--single-process'
+    //     ] : [])
+    //   ],
+    // };
 
-    // Docker/Render specific: Use system chrome if path is provided
-    if (isProd && process.env.PUPPETEER_EXECUTABLE_PATH) {
-      launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
-      console.log(`[Screenshot] 🔧 Using custom executable: ${launchOptions.executablePath}`);
-    }
+    // // Docker/Render specific: Use system chrome if path is provided
+    // if (isProd && process.env.PUPPETEER_EXECUTABLE_PATH) {
+    //   launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+    //   console.log(`[Screenshot] 🔧 Using custom executable: ${launchOptions.executablePath}`);
+    // }
+    // 
+    // console.log(`[Screenshot] 🚀 Launching browser...`);
+    // browser = await puppeteer.launch(launchOptions);
 
-    console.log(`[Screenshot] 🚀 Launching browser...`);
-    browser = await puppeteer.launch(launchOptions);
-
+    const browser = await getBrowser();
     page = await browser.newPage();
 
     // Stealth: Hide webdriver property
@@ -1270,6 +1343,7 @@ app.get('/take', async (req, res) => {
     }
   };
 
+  const unlock = await browserMutex.lock();
   try {
     console.log(`[Screenshot] Attempting ${type} capture for ${url}`);
 
@@ -1332,7 +1406,8 @@ app.get('/take', async (req, res) => {
     console.warn('[Screenshot] 🔄 Retrying with Light Mode (No Scroll, FullPage)...');
 
     try {
-      if (browser) await browser.close();
+      // if (browser) await browser.close();
+      if (page) await page.close().catch(() => {});
       pageClosed = false;
 
       let ua;
@@ -1356,7 +1431,8 @@ app.get('/take', async (req, res) => {
       console.warn('[Screenshot] ⚠️ All full-page attempts failed. Trying Safe Mode (Viewport only)...');
 
       try {
-        if (browser) await browser.close();
+        // if (browser) await browser.close();
+        if (page) await page.close().catch(() => {});
         pageClosed = false;
         
         // 🛡️ Safe Mode: Desktop UA, No Scroll, Viewport Only
@@ -1385,9 +1461,11 @@ app.get('/take', async (req, res) => {
       }
     }
   } finally {
-    if (browser) {
-      await browser.close().catch(() => {});
-    }
+    // if (browser) {
+    //   await browser.close().catch(() => {});
+    // }
+    if (page) await page.close().catch(() => {});
+    unlock();
   }
 });
 
