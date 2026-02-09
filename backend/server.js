@@ -82,7 +82,7 @@ let globalBrowser = null;
 const getBrowser = async () => {
   if (globalBrowser) {
     if (!globalBrowser.isConnected()) {
-      console.log('[Browser] Global browser disconnected. Re-launching...');
+      console.log('[Browser] Global browser disconnected. Cleaning up...');
       try { await globalBrowser.close(); } catch (e) {}
       globalBrowser = null;
     } else {
@@ -127,7 +127,11 @@ const getBrowser = async () => {
   if (process.env.PUPPETEER_EXECUTABLE_PATH && typeof process.env.PUPPETEER_EXECUTABLE_PATH === 'string' && process.env.PUPPETEER_EXECUTABLE_PATH.length > 0) {
     launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
   }
-  globalBrowser = await puppeteer.launch(launchOptions);
+  try {
+    globalBrowser = await puppeteer.launch(launchOptions);
+  } catch (error) {
+    console.error('[Browser] Failed to launch browser:', error);
+    throw error;
   return globalBrowser;
 };
 
@@ -1440,7 +1444,10 @@ app.get('/take', async (req, res) => {
 
     try {
       // if (browser) await browser.close();
-      if (page) await page.close().catch(() => {});
+      if (page) {
+          await page.close().catch(() => {});
+          page = null;
+        }
       pageClosed = false;
 
       let ua;
