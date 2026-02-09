@@ -158,7 +158,9 @@ const compressBase64 = async (base64String) => {
     // });
     // const page = await browser.newPage();
     
-    await page.setContent(`<html><body style="margin:0;padding:0;overflow:hidden;"><img id="img" src="${base64String}" style="display:block;;max-width:100%;" /></body></html>`, { waitUntil: 'load' });
+    // await page.setContent(`<html><body style="margin:0;padding:0;overflow:hidden;"><img id="img" src="${base64String}" style="display:block;;max-width:100%;" /></body></html>`, { waitUntil: 'load' });
+    const browser = await getBrowser();
+    page = await browser.newPage();
     // Safer way to load large base64 image to prevent "0.00MB" errors
     await page.goto('about:blank');
     await page.evaluate((b64) => {
@@ -176,8 +178,8 @@ const compressBase64 = async (base64String) => {
             document.body.appendChild(img);
         });
     }, base64String);
-    const browser = await getBrowser();
-    page = await browser.newPage();
+    // const browser = await getBrowser();
+    // page = await browser.newPage();
   
  
 
