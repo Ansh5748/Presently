@@ -161,26 +161,54 @@ const compressBase64 = async (base64String) => {
     // await page.setContent(`<html><body style="margin:0;padding:0;overflow:hidden;"><img id="img" src="${base64String}" style="display:block;;max-width:100%;" /></body></html>`, { waitUntil: 'load' });
     const browser = await getBrowser();
     page = await browser.newPage();
-    // Safer way to load large base64 image to prevent "0.00MB" errors
-    await page.goto('about:blank');
-    await page.evaluate((b64) => {
-        return new Promise((resolve, reject) => {
-            const img = document.createElement('img');
-            img.id = 'img';
-            img.style.display = 'block';
-            img.style.maxWidth = '100%';
-            img.onload = () => resolve();
-            img.onerror = (e) => reject(new Error('Image load failed'));
-            img.src = b64;
-            document.body.style.margin = '0';
-            document.body.style.padding = '0';
-            document.body.style.overflow = 'hidden';
-            document.body.appendChild(img);
-        });
-    }, base64String);
+    // // Safer way to load large base64 image to prevent "0.00MB" errors
+    // await page.goto('about:blank');
+    // await page.evaluate((b64) => {
+    //     return new Promise((resolve, reject) => {
+    //         const img = document.createElement('img');
+    //         img.id = 'img';
+    //         img.style.display = 'block';
+    //         img.style.maxWidth = '100%';
+    //         img.onload = () => resolve();
+    //         img.onerror = (e) => reject(new Error('Image load failed'));
+    //         img.src = b64;
+    //         document.body.style.margin = '0';
+    //         document.body.style.padding = '0';
+    //         document.body.style.overflow = 'hidden';
+    //         document.body.appendChild(img);
+    //     });
+    // }, base64String);
     // const browser = await getBrowser();
     // page = await browser.newPage();
   
+    // OPTIMIZATION: Use Request Interception to load image.
+    // Passing huge base64 strings via page.evaluate() or setContent() crashes low-memory servers.
+    await page.setRequestInterception(true);
+    page.on('request', request => {
+      if (request.url() === 'http://localhost/image.png') {
+        // Extract raw base64 data (remove data:image/...;base64, prefix if present)
+        const base64Data = base64String.includes(',') ? base64String.split(',')[1] : base64String;
+        request.respond({
+          status: 200,
+          contentType: 'image/png',
+          body: Buffer.from(base64Data, 'base64')
+        });
+      } else {
+        request.continue();
+      }
+    });
+
+    // Load a tiny HTML shell that requests the image
+    await page.setContent(`
+      <html>
+        <body style="margin:0;padding:0;overflow:hidden;">
+          <img id="img" src="http://localhost/image.png" style="display:block;max-width:100%;" />
+        </body>
+      </html>
+    `);
+    
+    // Wait for the image to actually load
+    await page.waitForSelector('#img', { timeout: 10000 });
  
 
     const img = await page.$('#img');
