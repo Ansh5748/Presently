@@ -161,36 +161,24 @@ const compressBase64 = async (base64String) => {
     // await page.setContent(`<html><body style="margin:0;padding:0;overflow:hidden;"><img id="img" src="${base64String}" style="display:block;;max-width:100%;" /></body></html>`, { waitUntil: 'load' });
     const browser = await getBrowser();
     page = await browser.newPage();
-    // // Safer way to load large base64 image to prevent "0.00MB" errors
-    // await page.goto('about:blank');
-    // await page.evaluate((b64) => {
-    //     return new Promise((resolve, reject) => {
-    //         const img = document.createElement('img');
-    //         img.id = 'img';
-    //         img.style.display = 'block';
-    //         img.style.maxWidth = '100%';
-    //         img.onload = () => resolve();
-    //         img.onerror = (e) => reject(new Error('Image load failed'));
-    //         img.src = b64;
-    //         document.body.style.margin = '0';
-    //         document.body.style.padding = '0';
-    //         document.body.style.overflow = 'hidden';
-    //         document.body.appendChild(img);
-    //     });
-    // }, base64String);
-    // const browser = await getBrowser();
-    // page = await browser.newPage();
+
+    // Generate a unique URL to prevent caching issues between requests
+    const uniqueId = generateId();
+    const imageUrl = `http://localhost/image-${uniqueId}`;
+
+    // Extract correct MIME type to ensure browser decodes it properly
+    const matches = base64String.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
+    const mimeType = matches ? matches[1] : 'image/png';
+    const base64Data = matches ? matches[2] : base64String;
   
     // OPTIMIZATION: Use Request Interception to load image.
     // Passing huge base64 strings via page.evaluate() or setContent() crashes low-memory servers.
     await page.setRequestInterception(true);
     page.on('request', request => {
-      if (request.url() === 'http://localhost/image.png') {
-        // Extract raw base64 data (remove data:image/...;base64, prefix if present)
-        const base64Data = base64String.includes(',') ? base64String.split(',')[1] : base64String;
+      if (request.url() === imageUrl) {
         request.respond({
           status: 200,
-          contentType: 'image/png',
+          contentType: mimeType,
           body: Buffer.from(base64Data, 'base64')
         });
       } else {
@@ -202,13 +190,16 @@ const compressBase64 = async (base64String) => {
     await page.setContent(`
       <html>
         <body style="margin:0;padding:0;overflow:hidden;">
-          <img id="img" src="http://localhost/image.png" style="display:block;max-width:100%;" />
+          <img id="img" src="${imageUrl}" style="display:block;max-width:100%;" />
         </body>
       </html>
     `);
     
     // Wait for the image to actually load
-    await page.waitForSelector('#img', { timeout: 10000 });
+    await page.waitForFunction(() => {
+      const img = document.querySelector('#img');
+      return img && img.complete && img.naturalWidth > 0;
+    }, { timeout: 30000 });
  
 
     const img = await page.$('#img');
@@ -233,14 +224,18 @@ const compressBase64 = async (base64String) => {
       }
 
       if (buffer.length === 0) {
-        console.warn('[Compression] Generated empty buffer, returning original.');
-        return base64String;
+        throw new Error('Generated empty buffer');
       }
       console.log(`[Compression] Reduced to ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
       return `data:image/webp;base64,${buffer.toString('base64')}`;
     }
   } catch (error) {
     console.error('[Compression] Failed:', error.message);
+    // Safety: If original is too big for Mongo (>14MB), return null to prevent DB crash
+    if (base64String.length > 14 * 1024 * 1024) {
+        console.error('[Compression] Original image too large for MongoDB fallback. Returning null.');
+        return null; 
+    }
     return base64String;
   } finally {
     // if (browser) await browser.close().catch(() => {});
