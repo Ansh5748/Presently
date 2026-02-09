@@ -82,12 +82,13 @@ let globalBrowser = null;
 const getBrowser = async () => {
   if (globalBrowser) {
     try {
-      // A simple check to see if the browser is still responsive.
       await globalBrowser.version();
       if (globalBrowser.isConnected()) {
+        console.log('[Browser] Reusing existing browser instance.');
         return globalBrowser;
       }
     } catch (e) {
+      // The browser is there, but not responding.
       console.error('[Browser] Browser is not responsive. Re-launching...');
     }
 
@@ -103,34 +104,42 @@ const getBrowser = async () => {
   const isProd = process.env.NODE_ENV === 'production';
   const launchOptions = {
     headless: true,
-    ignoreHTTPSErrors: true,
+    // Dump browser process output to the console. Useful for debugging.
+    dumpio: isProd,
     args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage', // Always enable for stability on heavy pages
-        '--disable-extensions',
-        '--disable-gpu',
-        '--disable-software-rasterizer',
-        '--mute-audio',
-        '--disable-blink-features=AutomationControlled',
-        '--window-size=1280,800', // Reduced from 1920x1080 to save size
-        '--disable-web-security',
-        '--disable-features=IsolateOrigins,site-per-process',
-        '--disable-site-isolation-trials',
-        '--no-first-run',
-        '--no-zygote',
-        // Stealth additions
-        '--disable-infobars',
-        '--exclude-switches=enable-automation',
-        '--use-fake-ui-for-media-stream',
-        '--use-fake-device-for-media-stream',
-        '--enable-features=NetworkService',
-        ...(isProd ? [
-          '--disable-accelerated-2d-canvas',
-          '--disable-gl-drawing-for-tests',
-          '--disable-canvas-aa',
-          '--single-process'
-        ] : [])
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--disable-gpu',
+      '--window-size=1280,800',
+      // Other memory-saving flags.
+      '--disable-background-networking',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-breakpad',
+      '--disable-client-side-phishing-detection',
+      '--disable-component-update',
+      '--disable-default-apps',
+      '--disable-domain-reliability',
+      '--disable-features=AudioServiceOutOfProcess',
+      '--disable-hang-monitor',
+      '--disable-ipc-flooding-protection',
+      '--disable-notifications',
+      '--disable-offer-store-unmasked-wallet-cards',
+      '--disable-popup-blocking',
+      '--disable-print-preview',
+      '--disable-prompt-on-repost',
+      '--disable-renderer-backgrounding',
+      '--disable-sync',
+      '--disable-translate',
+      '--metrics-recording-only',
+      '--no-first-run',
+      '--safebrowsing-disable-auto-update',
+      '--enable-automation',
+      '--password-store=basic',
+      '--use-mock-keychain',
+      ...(isProd ? ['--single-process'] : []),
     ],
     protocolTimeout: 120000
   };
@@ -138,7 +147,9 @@ const getBrowser = async () => {
     launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
   }
   try {
+    console.log('[Browser] Creating new browser instance...');
     globalBrowser = await puppeteer.launch(launchOptions);
+    console.log('[Browser] New browser instance created successfully.');
   } catch (error) {
     console.error('[Browser] Failed to launch browser:', error);
     throw error;
@@ -1147,6 +1158,7 @@ app.get('/take', async (req, res) => {
   // 🔁 helper: take screenshot attempt
   const attemptScreenshot = async (userAgent, options = {}) => {
     const { scroll = true, fullPage = true } = options;
+    const attemptName = scroll ? (fullPage ? 'Full' : 'Viewport') : 'Safe';
     const isProd = process.env.NODE_ENV === 'production';
     console.log(`[Screenshot] ⚙️  Config: ${isProd ? 'Production' : 'Development'} | UA: ${type} | Mode: ${scroll ? 'Full' : 'Safe'}`);
 
@@ -1254,11 +1266,16 @@ app.get('/take', async (req, res) => {
 
     // 🚀 navigate
     console.log(`[Screenshot] 🌍 Navigating to ${url}...`);
-    await page.goto(url, {
-      waitUntil: 'networkidle0', // More stable than domcontentloaded
-      timeout: 90000, // Increased timeout for slow networks/sites
-    });
-
+    try {
+      await page.goto(url, {
+        waitUntil: 'networkidle0', // More stable than domcontentloaded
+        timeout: 90000, // Increased timeout for slow networks/sites
+      });
+      console.log(`[Screenshot] > Navigation to ${url} successful.`);
+    } catch (error) {
+      console.error(`[Screenshot] > Navigation to ${url} failed:`, error.message);
+      throw error;
+    }
     // 📏 Ensure page has content before proceeding
     try {
       await page.waitForFunction(() => document.body && document.body.scrollHeight > 0, { timeout: 5000 });
@@ -1277,6 +1294,7 @@ app.get('/take', async (req, res) => {
     await page.waitForFunction(
       () => !!document && !!document.body,
     );
+    console.log(`[Screenshot] > DOM content ready.`);
 
     if (pageClosed || page.isClosed()) {
       throw new Error('PAGE_CLOSED');
@@ -1357,6 +1375,7 @@ app.get('/take', async (req, res) => {
         if (document.body.scrollHeight > maxH) {
             document.body.style.height = maxH + 'px';
             document.body.style.overflow = 'hidden';
+            console.log(`[Screenshot] > Capped page height to ${maxH}px.`);
         }
       });
     } catch (e) {}
@@ -1377,6 +1396,7 @@ app.get('/take', async (req, res) => {
     // 📸 screenshot
     // console.log(`[Screenshot] 📸 Capturing final image...`);
     try {
+      console.log(`[Screenshot] > Taking screenshot (fullPage: ${fullPage})...`);
       const buffer = await page.screenshot(fullPage ? {
         fullPage: true, 
         type: 'webp', // WebP is faster and smaller
@@ -1387,6 +1407,7 @@ app.get('/take', async (req, res) => {
       if (!buffer || buffer.length === 0) {
         throw new Error('Generated empty screenshot buffer');
       }
+      console.log(`[Screenshot] > Screenshot successful (${(buffer.length / 1024).toFixed(2)} KB).`);
       return buffer;
 
     } catch (e) {
@@ -1402,6 +1423,7 @@ app.get('/take', async (req, res) => {
   const unlock = await browserMutex.lock();
   try {
     console.log(`[Screenshot] Attempting ${type} capture for ${url}`);
+    console.log('[take] Running Attempt 1: Standard Mode');
 
     let ua;
     if (type === 'mobile') {
@@ -1511,9 +1533,18 @@ app.get('/take', async (req, res) => {
         res.set('Content-Type', 'image/webp');
         return res.send(safeScreenshot);
       } catch (safeErr) {
+        console.error(`[Screenshot] Safe Mode failed for ${url}: ${safeErr.message}`);
+        let reason = 'UNKNOWN_FAILURE';
+        if (safeErr.message.includes('Navigating frame was detached') || safeErr.message.includes('Target closed')) {
+          reason = 'BROWSER_CRASH';
+        } else if (safeErr.message.includes('timed out')) {
+          reason = 'TIMEOUT';
+        } else if (safeErr.message.includes('net::')) {
+          reason = 'NAVIGATION_ERROR';
+        }
         return res.status(422).json({
           success: false,
-          reason: 'SITE_BLOCKED',
+          reason: reason,
           message: 'Unable to capture screenshot. Site may be blocking automated access.',
           url,
         });
