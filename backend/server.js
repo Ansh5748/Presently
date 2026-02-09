@@ -93,13 +93,15 @@ const getBrowser = async () => {
   const isProd = process.env.NODE_ENV === 'production';
   const launchOptions = {
     headless: true,
+    ignoreHTTPSErrors: true,
     args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage', // Always enable for stability on heavy pages
+        '--disable-extensions',
         '--disable-gpu',
         '--disable-software-rasterizer',
-+      '--mute-audio',
+        '--mute-audio',
         '--disable-blink-features=AutomationControlled',
         '--window-size=1280,800', // Reduced from 1920x1080 to save size
         '--disable-web-security',
@@ -122,7 +124,7 @@ const getBrowser = async () => {
     ],
     protocolTimeout: 120000
   };
-  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+  if (process.env.PUPPETEER_EXECUTABLE_PATH && typeof process.env.PUPPETEER_EXECUTABLE_PATH === 'string' && process.env.PUPPETEER_EXECUTABLE_PATH.length > 0) {
     launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
   }
   globalBrowser = await puppeteer.launch(launchOptions);
@@ -1062,6 +1064,7 @@ app.get('/take', async (req, res) => {
       message: 'URL query parameter is required',
     });
   }
+  url = url.trim();
 
   // Fix: Ensure URL has protocol
   if (!url.startsWith('http://') && !url.startsWith('https://')) {
@@ -1196,16 +1199,19 @@ app.get('/take', async (req, res) => {
       );
     });
 
-    // 🛡️ Block heavy media to prevent crashes/timeouts
-    await page.setRequestInterception(true);
-    page.on('request', (req) => {
-      const resourceType = req.resourceType();
-      if (resourceType === 'media' || resourceType === 'websocket') {
-        req.abort();
-      } else {
-        req.continue();
-      }
-    });
+    // // 🛡️ Block heavy media to prevent crashes/timeouts
+    // await page.setRequestInterception(true);
+    // page.on('request', (req) => {
+    //   const resourceType = req.resourceType();
+    //   if (resourceType === 'media' || resourceType === 'websocket') {
+    //     req.abort();
+    //   } else {
+    //     req.continue();
+    //   }
+    // });
+
+     // Note: Request Interception removed to prevent "s.startsWith is not a function" errors
++    // and instability with data/blob URLs.
 
     // 🔒 lifecycle guards
     page.on('close', () => { pageClosed = true; });
