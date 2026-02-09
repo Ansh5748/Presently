@@ -81,15 +81,25 @@ let globalBrowser = null;
 
 const getBrowser = async () => {
   if (globalBrowser) {
-    if (!globalBrowser.isConnected()) {
-      console.log('[Browser] Global browser disconnected. Cleaning up...');
-      try { await globalBrowser.close(); } catch (e) {}
-      globalBrowser = null;
-    } else {
-      return globalBrowser;
+    try {
+      // A simple check to see if the browser is still responsive.
+      await globalBrowser.version();
+      if (globalBrowser.isConnected()) {
+        return globalBrowser;
+      }
+    } catch (e) {
+      console.error('[Browser] Browser is not responsive. Re-launching...');
     }
+
+    // If we are here, the browser is not connected or not responsive.
+    try {
+      await globalBrowser.close();
+    } catch (e) {
+      console.error('[Browser] Failed to close unresponsive browser:', e);
+    }
+    globalBrowser = null;
   }
-  
+
   const isProd = process.env.NODE_ENV === 'production';
   const launchOptions = {
     headless: true,
@@ -1184,6 +1194,14 @@ app.get('/take', async (req, res) => {
     const browser = await getBrowser();
     page = await browser.newPage();
 
+    page.on('error', err => {
+        console.error('[Screenshot] Page error:', err.message);
+        pageClosed = true;
+    });
+    page.on('pageerror', pageErr => {
+        console.error('[Screenshot] Uncaught page exception:', pageErr.message);
+    });
+
     // Stealth: Hide webdriver property
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => false });
@@ -1237,8 +1255,8 @@ app.get('/take', async (req, res) => {
     // 🚀 navigate
     console.log(`[Screenshot] 🌍 Navigating to ${url}...`);
     await page.goto(url, {
-      waitUntil: 'domcontentloaded', // Fast first pass
-      timeout: 60000,
+      waitUntil: 'networkidle0', // More stable than domcontentloaded
+      timeout: 90000, // Increased timeout for slow networks/sites
     });
 
     // 📏 Ensure page has content before proceeding
