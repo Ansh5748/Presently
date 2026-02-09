@@ -98,6 +98,8 @@ const getBrowser = async () => {
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage', // Always enable for stability on heavy pages
         '--disable-gpu',
+        '--disable-software-rasterizer',
++      '--mute-audio',
         '--disable-blink-features=AutomationControlled',
         '--window-size=1280,800', // Reduced from 1920x1080 to save size
         '--disable-web-security',
@@ -199,7 +201,7 @@ const compressBase64 = async (base64String) => {
     await page.waitForFunction(() => {
       const img = document.querySelector('#img');
       return img && img.complete && img.naturalWidth > 0;
-    }, { timeout: 30000 });
+    }, { timeout: 60000 });
  
 
     const img = await page.$('#img');
@@ -232,8 +234,8 @@ const compressBase64 = async (base64String) => {
   } catch (error) {
     console.error('[Compression] Failed:', error.message);
     // Safety: If original is too big for Mongo (>14MB), return null to prevent DB crash
-    if (base64String.length > 14 * 1024 * 1024) {
-        console.error('[Compression] Original image too large for MongoDB fallback. Returning null.');
+    if (base64String.length > 2 * 1024 * 1024) {
+         console.error(`[Compression] Original image too large for MongoDB fallback (${(base64String.length/1024/1024).toFixed(2)}MB). Returning null.`);
         return null; 
     }
     return base64String;
