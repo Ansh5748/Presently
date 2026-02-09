@@ -132,6 +132,7 @@ const getBrowser = async () => {
   } catch (error) {
     console.error('[Browser] Failed to launch browser:', error);
     throw error;
+  }
   return globalBrowser;
 };
 
