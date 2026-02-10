@@ -109,7 +109,7 @@ class EmailService {
             <p>Best regards,<br>The Presently Team</p>
           </div>
           <div class="footer">
-            <p>© 2024 Presently - Freelance Delivery Tool. All rights reserved.</p>
+            <p>© 2026 Presently - Freelance Delivery Tool. All rights reserved.</p>
           </div>
         </div>
       </body>
@@ -144,7 +144,7 @@ class EmailService {
             <p>Best regards,<br>The Presently Team</p>
           </div>
           <div class="footer">
-            <p>© 2024 Presently - Freelance Delivery Tool. All rights reserved.</p>
+            <p>© 2026 Presently - Freelance Delivery Tool. All rights reserved.</p>
           </div>
         </div>
       </body>

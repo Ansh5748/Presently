@@ -18,6 +18,10 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  isLocalComputeEnabled: {
+    type: Boolean,
+    default: false
+  },
   refreshTokens: [{
     type: String
   }],

@@ -4,7 +4,12 @@ import { ApiService } from '../services/apiService';
 import { fetchScreenshotAsBase64 } from '../services/screenshotService';
 import { refineText } from '../services/geminiService';
 import { Project, Pin, ProjectStatus, ProjectPage } from '../types';
-import { ArrowLeft, Share2, Sparkles, X, MapPin, Eye, Loader2, Image as ImageIcon, Trash2, Layout, Link as LinkIcon, Pencil, Monitor, Smartphone, ChevronDown, ChevronUp } from 'lucide-react';
+import { ArrowLeft, Share2, Sparkles, X, MapPin, Eye, Loader2, Image as ImageIcon, Trash2, Layout, Link as LinkIcon, Pencil, Monitor, Smartphone, ChevronDown, ChevronUp, Laptop } from 'lucide-react';
+
+const SPECIAL_EMAILS = [
+  'divyanshgupta5748@gmail.com',
+  'divyanshgupta4949@gmail.com'
+];
 
 interface ProjectEditorProps {
   projectId: string;
@@ -28,11 +33,22 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
   const [loadingStep, setLoadingStep] = useState('');
   const [loading, setLoading] = useState(true);
   const [showMobileScreens, setShowMobileScreens] = useState(false);
+
+  // Permission State
+  const [showPermissionModal, setShowPermissionModal] = useState(false);
+  const [isLocalComputeEnabled, setIsLocalComputeEnabled] = useState(false);
+  const [permissionLoading, setPermissionLoading] = useState(false);
+  const [userEmail, setUserEmail] = useState('');
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
 
   useEffect(() => {
+    const user = StorageService.getUser() as any;
+    if (user) {
+      setUserEmail(user.email);
+      setIsLocalComputeEnabled(user.isLocalComputeEnabled || false);
+    }
     loadProject();
   }, [projectId]);
 
@@ -65,6 +81,52 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       handleViewModeChange('mobile');
     }
   }, [activePageId]);
+
+  const handleGrantPermission = async () => {
+    setPermissionLoading(true);
+    try {
+      const user = StorageService.getUser() as any;
+      if (!user) {
+        onNavigate('/login');
+        return;
+      }
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/user/permissions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${user.accessToken}`
+        },
+        body: JSON.stringify({ isLocalComputeEnabled: true })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        StorageService.saveUser({ ...user, isLocalComputeEnabled: true });
+        setIsLocalComputeEnabled(true);
+        setShowPermissionModal(false);
+      } else {
+        console.error("Permission request failed:", response.status);
+        alert("Failed to grant permission. Please try again.");
+      }
+    } catch (error: any) {
+      console.error("Permission error details:", error);
+      if (error.name === 'SyntaxError') {
+        alert("Server error: Received invalid response (likely HTML instead of JSON). Check your VITE_API_URL.");
+      } else {
+        alert(`Network error: ${error.message || 'Check your connection'}`);
+      }
+    } finally {
+      setPermissionLoading(false);
+    }
+  };
+
+  const checkPermission = () => {
+    if (SPECIAL_EMAILS.includes(userEmail.toLowerCase()) || isLocalComputeEnabled) {
+      return true;
+    }
+    setShowPermissionModal(true);
+    return false;
+  };
 
   const activePage = project?.pages.find(p => p.id === activePageId);
   const activePins = pins.filter(p => p.pageId === activePageId && (p.device === viewMode || (!p.device && viewMode === 'desktop')));
@@ -235,8 +297,9 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
 
   const fetchDeviceScreenshot = async (url: string, device: 'desktop' | 'mobile') => {
     // Use the backend directly to specify device type
-    // Add timestamp to prevent caching (Fix for 304 Not Modified issues)
-    const response = await fetch(`${import.meta.env.VITE_API_URL}/take?url=${encodeURIComponent(url)}&type=${device}&t=${Date.now()}`);
+    // Add timestamp to prevent caching
+    const useLocal = isLocalComputeEnabled ? 'true' : 'false';
+    const response = await fetch(`${import.meta.env.VITE_API_URL}/take?url=${encodeURIComponent(url)}&type=${device}&t=${Date.now()}&useLocal=${useLocal}`);
     if (!response.ok) {
       throw new Error('Failed to capture screenshot');
     }
@@ -249,6 +312,8 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
   };
 
   const handleAddFromUrl = async () => {
+    if (!checkPermission()) return;
+
     const url = prompt("Enter the URL of the page you want to capture:");
     if (!url || !project) return;
 
@@ -326,6 +391,8 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
     if (!project) return;
 
     if (page.originalUrl) {
+      if (!checkPermission()) return;
+
       const originalUrl = page.originalUrl;
       const newUrlInput = prompt("Enter the new URL for this page:", originalUrl);
       if (newUrlInput === null) return;
@@ -353,7 +420,8 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
           name: finalName,
           imageUrl: newScreenshotBase64,
           originalUrl: finalUrl,
-          deleteAllPins: true
+          deleteAllPins: true,
+          mobileImageUrl: null // Clear mobile image so it re-fetches on next view
         });
         
         const updatedProject = await ApiService.getProject(project.id);
@@ -431,6 +499,10 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
   };
 
   const handleViewModeChange = async (mode: 'desktop' | 'mobile') => {
+    if (mode === 'mobile' && activePage && activePage.originalUrl && !(activePage as any).mobileImageUrl) {
+      if (!checkPermission()) return;
+    }
+
     setViewMode(mode);
     
     // If switching to mobile and we don't have the mobile screenshot yet, fetch it
@@ -539,6 +611,43 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
           </button>
         </div>
       </header>
+
+      {/* Permission Modal */}
+      {showPermissionModal && (
+        <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex flex-col items-center text-center">
+              <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mb-4 text-blue-600">
+                <Laptop size={24} />
+              </div>
+              <h2 className="text-xl font-bold text-slate-900 mb-2">Enable Local Compute</h2>
+              <p className="text-slate-600 text-sm mb-6 leading-relaxed">
+                To ensure the best performance and avoid server overload, we need your permission to use your local browser resources for processing screenshots.
+              </p>
+              
+              <div className="flex flex-col gap-3 w-full">
+                <button 
+                  onClick={handleGrantPermission}
+                  disabled={permissionLoading}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+                >
+                  {permissionLoading ? <Loader2 size={18} className="animate-spin" /> : null}
+                  Allow & Continue
+                </button>
+                <button 
+                  onClick={() => setShowPermissionModal(false)}
+                  className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 py-3 rounded-lg font-medium transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+              <p className="text-xs text-slate-400 mt-4">
+                You only need to do this once.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
         <div className="w-full md:w-64 bg-white border-b md:border-r md:border-b-0 border-slate-200 flex flex-col z-30 relative">

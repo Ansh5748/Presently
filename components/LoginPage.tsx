@@ -27,8 +27,15 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onNavigate
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(errorText || 'Login failed');
+        const data = await response.json().catch(() => null);
+        let errorMessage = 'Login failed. Please try again.';
+
+        if (data && data.error === 'Invalid credentials') {
+          errorMessage = 'Incorrect email or password.';
+        } else if (data && data.error) {
+          errorMessage = data.error;
+        }
+        throw new Error(errorMessage);
       }
 
       const { accessToken, user } = await response.json();

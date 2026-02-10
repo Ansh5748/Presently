@@ -316,11 +316,15 @@ app.post('/auth/signup', async (req, res) => {
 
     // Hash password before saving
     const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Check if user should have local compute enabled by default (admins)
+    const isSpecialUser = FREE_EMAILS[email.toLowerCase()] !== undefined;
     
     const user = new User({ 
       name, 
       email: email.toLowerCase(), 
-      password: hashedPassword 
+      password: hashedPassword,
+      isLocalComputeEnabled: isSpecialUser // Auto-enable for admins
     });
     await user.save();
 
@@ -355,7 +359,8 @@ app.post('/auth/login', async (req, res) => {
     const userPayload = { 
       id: user._id.toString(), 
       name: user.name, 
-      email: user.email 
+      email: user.email,
+      isLocalComputeEnabled: user.isLocalComputeEnabled
     };
     
     const accessToken = jwt.sign(userPayload, ACCESS_TOKEN_SECRET, { expiresIn: '3h' });
@@ -499,6 +504,40 @@ app.post('/auth/reset-password', async (req, res) => {
 
   } catch (error) {
     console.error('[ResetPassword] Error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ==================== USER ROUTES ====================
+
+// Update Permission
+app.post('/user/permissions', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { isLocalComputeEnabled } = req.body;
+
+    const user = await User.findByIdAndUpdate(
+      userId, 
+      { isLocalComputeEnabled: !!isLocalComputeEnabled },
+      { new: true }
+    );
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Return updated user payload for frontend storage
+    const userPayload = { 
+      id: user._id.toString(), 
+      name: user.name, 
+      email: user.email,
+      isLocalComputeEnabled: user.isLocalComputeEnabled
+    };
+
+    res.json({ user: userPayload });
+
+  } catch (error) {
+    console.error('[Permissions] Error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -1082,7 +1121,7 @@ app.delete('/pins/:pinId', authenticateToken, async (req, res) => {
 // ==================== SCREENSHOT SERVICE ====================
 
 app.get('/take', async (req, res) => {
-  let { url, type = 'desktop' } = req.query;
+  let { url, type = 'desktop', useLocal } = req.query;
 
   if (!url) {
     return res.status(400).json({
@@ -1095,6 +1134,10 @@ app.get('/take', async (req, res) => {
   // Fix: Ensure URL has protocol
   if (!url.startsWith('http://') && !url.startsWith('https://')) {
     url = 'https://' + url;
+  }
+
+  if (useLocal === 'true') {
+    console.log(`[Screenshot] 💻 User requested Local Compute for ${url}`);
   }
 
   // Fix: Prevent caching of screenshots to avoid 304s on retries

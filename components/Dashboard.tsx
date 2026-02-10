@@ -5,7 +5,12 @@ import { fetchScreenshotAsBase64 } from '../services/screenshotService';
 import { SubscriptionModal } from './SubscriptionModal';
 import { Project, ProjectStatus } from '../types';
 import logoImg from '../src/assets/presently_logo.png'; 
-import { Plus, ExternalLink, Trash2, Loader2, ArrowRight, LogOut, Crown } from 'lucide-react';
+import { Plus, ExternalLink, Trash2, Loader2, ArrowRight, LogOut, Crown, Laptop } from 'lucide-react';
+
+const SPECIAL_EMAILS = [
+  'divyanshgupta5748@gmail.com',
+  'divyanshgupta4949@gmail.com'
+];
 
 interface DashboardProps {
   onNavigate: (path: string) => void;
@@ -22,14 +27,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
   const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
   const [hasActiveSubscription, setHasActiveSubscription] = useState(false);
   const [loadingSubscription, setLoadingSubscription] = useState(true);
+  
+  // Permission State
+  const [showPermissionModal, setShowPermissionModal] = useState(false);
+  const [isLocalComputeEnabled, setIsLocalComputeEnabled] = useState(false);
+  const [permissionLoading, setPermissionLoading] = useState(false);
 
   useEffect(() => {
-    const user = StorageService.getUser();
+    const user = StorageService.getUser() as any;
     if (user) {
       setUserName(user.name);
       setUserEmail(user.email);
+      setIsLocalComputeEnabled(user.isLocalComputeEnabled || false);
       loadProjects();
       checkSubscription();
+      
+      if (!user.isLocalComputeEnabled && !SPECIAL_EMAILS.includes(user.email.toLowerCase())) {
+        setShowPermissionModal(true);
+      }
     } else {
       onNavigate('/login');
     }
@@ -65,6 +80,52 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
     }
   };
 
+  const handleGrantPermission = async () => {
+    setPermissionLoading(true);
+    try {
+      const user = StorageService.getUser() as any;
+      if (!user) {
+        onNavigate('/login');
+        return;
+      }
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/user/permissions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${user.accessToken}`
+        },
+        body: JSON.stringify({ isLocalComputeEnabled: true })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        StorageService.saveUser({ ...user, isLocalComputeEnabled: true });
+        setIsLocalComputeEnabled(true);
+        setShowPermissionModal(false);
+      } else {
+        console.error("Permission request failed:", response.status);
+        alert("Failed to grant permission. Please try again.");
+      }
+    } catch (error: any) {
+      console.error("Permission error details:", error);
+      if (error.name === 'SyntaxError') {
+        alert("Server error: Received invalid response (likely HTML instead of JSON). Check your VITE_API_URL.");
+      } else {
+        alert(`Network error: ${error.message || 'Check your connection'}`);
+      }
+    } finally {
+      setPermissionLoading(false);
+    }
+  };
+
+  const handleNewProjectClick = () => {
+    if (SPECIAL_EMAILS.includes(userEmail.toLowerCase()) || isLocalComputeEnabled) {
+      setIsCreating(true);
+    } else {
+      setShowPermissionModal(true);
+    }
+  };
+
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -74,7 +135,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
         throw new Error("User not authenticated.");
       }
 
-      const screenshotBase64 = await fetchScreenshotAsBase64(newProjectData.websiteUrl);
+      // Custom fetch to include useLocal param
+      const useLocal = isLocalComputeEnabled ? 'true' : 'false';
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/take?url=${encodeURIComponent(newProjectData.websiteUrl)}&type=desktop&t=${Date.now()}&useLocal=${useLocal}`);
+      if (!response.ok) throw new Error('Failed to capture screenshot');
+      const blob = await response.blob();
+      const screenshotBase64 = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.readAsDataURL(blob);
+      });
 
       const payload: any = {
         ...newProjectData,
@@ -151,7 +221,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
           )}
           <div className='flex flex-row ml-auto sm:ml-0'>
           <button 
-            onClick={() => setIsCreating(true)}
+            onClick={handleNewProjectClick}
             className="flex items-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-5 py-2.5 rounded-lg transition-all shadow-sm font-small"
           >
             <Plus size={18} />
@@ -167,6 +237,43 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
           </div>
         </div>
       </div>
+
+      {/* Permission Modal */}
+      {showPermissionModal && (
+        <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex flex-col items-center text-center">
+              <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mb-4 text-blue-600">
+                <Laptop size={24} />
+              </div>
+              <h2 className="text-xl font-bold text-slate-900 mb-2">Enable Local Compute</h2>
+              <p className="text-slate-600 text-sm mb-6 leading-relaxed">
+                To ensure the best performance and avoid server overload, we need your permission to use your local browser resources for processing screenshots.
+              </p>
+              
+              <div className="flex flex-col gap-3 w-full">
+                <button 
+                  onClick={handleGrantPermission}
+                  disabled={permissionLoading}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+                >
+                  {permissionLoading ? <Loader2 size={18} className="animate-spin" /> : null}
+                  Allow & Continue
+                </button>
+                <button 
+                  onClick={() => setShowPermissionModal(false)}
+                  className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 py-3 rounded-lg font-medium transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+              <p className="text-xs text-slate-400 mt-4">
+                You only need to do this once.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isCreating && (
         <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 backdrop-blur-sm">
