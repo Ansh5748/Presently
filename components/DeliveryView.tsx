@@ -175,7 +175,9 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
                     ${activePageId === page.id ? 'bg-slate-900 text-white shadow-md' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}
                   `}
                 >
-                  {page.name}
+                  {page.name.length > 25
+                    ? page.name.slice(0, 25) + '...'
+                      : page.name}
                 </button>
               ))}
             </div>
@@ -184,7 +186,13 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
           {/* Info Card */}
           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
             <div className="flex justify-between items-start mb-4">
-              <h2 className="text-xl font-bold text-slate-900">{activePage?.name || 'Overview'}</h2>
+              <h2 className="text-xl font-bold text-slate-900">
+                {activePage?.name
+                  ? activePage.name.length > 25
+                  ? activePage.name.slice(0, 25) + '...'
+                  : activePage.name
+                  : 'Overview'}
+                </h2>
               {!isLiveView && (
                 isEditingDetails ? (
                   <button onClick={handleSubmitDetails} className="text-sm font-medium bg-blue-600 text-white px-3 py-1 rounded-md hover:bg-blue-700">
