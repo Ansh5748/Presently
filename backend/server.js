@@ -1602,7 +1602,9 @@ app.get('/take', async (req, res) => {
   }
 });
 
-
+app.get('/', (req, res) => {
+  res.send('👋 Hi, Presently Backend running successfully...');
+});
 
 // ==================== SERVER START ====================
 
