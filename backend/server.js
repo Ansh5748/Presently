@@ -172,24 +172,28 @@ const compressBase64 = async (base64String) => {
 
   console.log(`[Compression] Optimizing image (${(sizeInBytes / 1024 / 1024).toFixed(2)}MB)...`);
 
-  const unlock = await browserMutex.lock();
+  // const unlock = await browserMutex.lock();
+  let browser;
   let page;
   try {
-    // browser = await puppeteer.launch({
-    //   headless: true,
-    //   args: [
-    //     '--no-sandbox',
-    //     '--disable-setuid-sandbox', 
-    //     '--disable-dev-shm-usage',
-    //     '--single-process',
-    //     '--no-zygote'
-    //   ],
-    //   protocolTimeout: 60000
-    // });
+    browser = await puppeteer.launch({
+      headless: true,
+      dumpio: false, // Reduce noise
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox', 
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--disable-gpu',
+        '--single-process',
+        '--no-zygote'
+      ],
+      protocolTimeout: 60000
+    });
     // const page = await browser.newPage();
     
     // await page.setContent(`<html><body style="margin:0;padding:0;overflow:hidden;"><img id="img" src="${base64String}" style="display:block;;max-width:100%;" /></body></html>`, { waitUntil: 'load' });
-    const browser = await getBrowser();
+    // const browser = await getBrowser();
     page = await browser.newPage();
 
     // Generate a unique URL to prevent caching issues between requests
@@ -225,11 +229,11 @@ const compressBase64 = async (base64String) => {
       </html>
     `);
     
-    // Wait for the image to actually load
+    // Wait for the image to actually load. Fail fast (30s) if it's stuck.
     await page.waitForFunction(() => {
       const img = document.querySelector('#img');
       return img && img.complete && img.naturalWidth > 0;
-    }, { timeout: 60000 });
+    }, { timeout: 30000 });
  
 
     const img = await page.$('#img');
@@ -261,8 +265,8 @@ const compressBase64 = async (base64String) => {
     }
   } catch (error) {
     console.error('[Compression] Failed:', error.message);
-    // Safety: If original is too big for Mongo (>14MB), return null to prevent DB crash
-    if (base64String.length > 2 * 1024 * 1024) {
+    // Safety: If original is too big for Mongo (>7MB), return null to prevent DB crash
+    if (base64String.length > 7 * 1024 * 1024) {
          console.error(`[Compression] Original image too large for MongoDB fallback (${(base64String.length/1024/1024).toFixed(2)}MB). Returning null.`);
         return null; 
     }
@@ -270,7 +274,8 @@ const compressBase64 = async (base64String) => {
   } finally {
     // if (browser) await browser.close().catch(() => {});
     if (page) await page.close().catch(() => {});
-    unlock();
+    // unlock();
+    if (browser) await browser.close().catch(() => {});
   }
   return base64String;
 };
@@ -806,6 +811,9 @@ app.post('/projects', authenticateToken, async (req, res) => {
     // Compress initialPageUrl if needed
     const compressedImageUrl = await compressBase64(initialPageUrl);
 
+    if (!compressedImageUrl) {
+      return res.status(422).json({ error: 'Image too large to process. Please try a smaller page.' });
+    }
     const projectId = generateId();
     const project = new Project({
       id: projectId,
@@ -846,6 +854,10 @@ app.post('/projects/:projectId/pages', authenticateToken, async (req, res) => {
 
     // Compress imageUrl if needed
     const compressedImageUrl = await compressBase64(imageUrl);
+
+    if (!compressedImageUrl) {
+      return res.status(422).json({ error: 'Image too large to process.' });
+    }
 
     const newPage = {
       id: generateId(),
@@ -897,9 +909,11 @@ app.patch('/projects/:projectId/pages/:pageId', authenticateToken, async (req, r
     // Compress images if updated
     if (updates.imageUrl) {
       updates.imageUrl = await compressBase64(updates.imageUrl);
+      if (!updates.imageUrl) return res.status(422).json({ error: 'Desktop image too large.' });
     }
     if (updates.mobileImageUrl) {
       updates.mobileImageUrl = await compressBase64(updates.mobileImageUrl);
+      if (!updates.mobileImageUrl) return res.status(422).json({ error: 'Mobile image too large.' });
     }
 
     page.set(updates);
@@ -1136,8 +1150,9 @@ app.get('/take', async (req, res) => {
     url = 'https://' + url;
   }
 
-  if (useLocal === 'true') {
+  if (useLocal === 'true' || useLocal === true) {
     console.log(`[Screenshot] 💻 User requested Local Compute for ${url}`);
+    console.log(`[Screenshot] ℹ️  Currently falling back to server-side processing as client-side capture is not yet implemented.`);
   }
 
   // Fix: Prevent caching of screenshots to avoid 304s on retries
@@ -1557,7 +1572,7 @@ app.get('/take', async (req, res) => {
       try {
         // if (browser) await browser.close();
         if (page) await page.close().catch(() => {});
-        pageClosed = false;
+        pageClosed = false;                                                                                                                                                                              
         
         // 🛡️ Safe Mode: Desktop UA, No Scroll, Viewport Only
         let ua;
