@@ -157,128 +157,8 @@ const getBrowser = async () => {
   return globalBrowser;
 };
 
-// Compression Helper
-const compressBase64 = async (base64String) => {
-  if (!base64String || typeof base64String !== 'string' || !base64String.startsWith('data:image')) {
-    return base64String;
-  }
-
-  // Check size (approximate)
-  const sizeInBytes = (base64String.length * 3) / 4;
-  const TARGET_SIZE = 500 * 1024;
-  const MAX_SIZE = 800 * 1024;
-
-  if (sizeInBytes <= MAX_SIZE) return base64String;
-
-  console.log(`[Compression] Optimizing image (${(sizeInBytes / 1024 / 1024).toFixed(2)}MB)...`);
-
-  // const unlock = await browserMutex.lock();
-  let browser;
-  let page;
-  try {
-    browser = await puppeteer.launch({
-      headless: true,
-      dumpio: false, // Reduce noise
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox', 
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--disable-gpu',
-        '--single-process',
-        '--no-zygote'
-      ],
-      protocolTimeout: 60000
-    });
-    // const page = await browser.newPage();
-    
-    // await page.setContent(`<html><body style="margin:0;padding:0;overflow:hidden;"><img id="img" src="${base64String}" style="display:block;;max-width:100%;" /></body></html>`, { waitUntil: 'load' });
-    // const browser = await getBrowser();
-    page = await browser.newPage();
-
-    // Generate a unique URL to prevent caching issues between requests
-    const uniqueId = generateId();
-    const imageUrl = `http://localhost/image-${uniqueId}`;
-
-    // Extract correct MIME type to ensure browser decodes it properly
-    const matches = base64String.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
-    const mimeType = matches ? matches[1] : 'image/png';
-    const base64Data = matches ? matches[2] : base64String;
-  
-    // OPTIMIZATION: Use Request Interception to load image.
-    // Passing huge base64 strings via page.evaluate() or setContent() crashes low-memory servers.
-    await page.setRequestInterception(true);
-    page.on('request', request => {
-      if (request.url() === imageUrl) {
-        request.respond({
-          status: 200,
-          contentType: mimeType,
-          body: Buffer.from(base64Data, 'base64')
-        });
-      } else {
-        request.continue();
-      }
-    });
-
-    // Load a tiny HTML shell that requests the image
-    await page.setContent(`
-      <html>
-        <body style="margin:0;padding:0;overflow:hidden;">
-          <img id="img" src="${imageUrl}" style="display:block;max-width:100%;" />
-        </body>
-      </html>
-    `);
-    
-    // Wait for the image to actually load. Fail fast (30s) if it's stuck.
-    await page.waitForFunction(() => {
-      const img = document.querySelector('#img');
-      return img && img.complete && img.naturalWidth > 0;
-    }, { timeout: 30000 });
- 
-
-    const img = await page.$('#img');
-    const box = await img.boundingBox();
-
-    if (box) {
-      // Set viewport to match image dimensions exactly
-      const width = Math.ceil(box.width);
-      const height = Math.ceil(box.height);
-      await page.setViewport({ width, height });
-      
-      // Try progressive quality reduction
-      let buffer = await page.screenshot({ type: 'webp', quality: 50, fullPage: false });
-      
-      if (buffer.length > TARGET_SIZE) {
-         buffer = await page.screenshot({ type: 'webp', quality: 25, fullPage: false });
-      }
-      
-      if (buffer.length > MAX_SIZE) {
-         await page.evaluate(() => { document.body.style.zoom = '0.7'; });
-         buffer = await page.screenshot({ type: 'webp', quality: 20, fullPage: false });
-      }
-
-      if (buffer.length === 0) {
-        throw new Error('Generated empty buffer');
-      }
-      console.log(`[Compression] Reduced to ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
-      return `data:image/webp;base64,${buffer.toString('base64')}`;
-    }
-  } catch (error) {
-    console.error('[Compression] Failed:', error.message);
-    // Safety: If original is too big for Mongo (>7MB), return null to prevent DB crash
-    if (base64String.length > 7 * 1024 * 1024) {
-         console.error(`[Compression] Original image too large for MongoDB fallback (${(base64String.length/1024/1024).toFixed(2)}MB). Returning null.`);
-        return null; 
-    }
-    return base64String;
-  } finally {
-    // if (browser) await browser.close().catch(() => {});
-    if (page) await page.close().catch(() => {});
-    // unlock();
-    if (browser) await browser.close().catch(() => {});
-  }
-  return base64String;
-};
+// NOTE: Image compression has been moved to the frontend for better performance on free-tier deployments
+// The frontend now compresses images to 200-500KB before sending them to the backend
 
 // Special free email addresses
 const FREE_EMAILS = {
@@ -808,12 +688,7 @@ app.post('/projects', authenticateToken, async (req, res) => {
       }
     }
 
-    // Compress initialPageUrl if needed
-    const compressedImageUrl = await compressBase64(initialPageUrl);
-
-    if (!compressedImageUrl) {
-      return res.status(422).json({ error: 'Image too large to process. Please try a smaller page.' });
-    }
+    // Image compression is now handled by the frontend
     const projectId = generateId();
     const project = new Project({
       id: projectId,
@@ -824,7 +699,7 @@ app.post('/projects', authenticateToken, async (req, res) => {
       pages: [{
         id: generateId(),
         name: 'Main Page',
-        imageUrl: compressedImageUrl,
+        imageUrl: initialPageUrl, // Already compressed by frontend
         originalUrl: websiteUrl
       }],
       status: 'DRAFT'
@@ -852,17 +727,11 @@ app.post('/projects/:projectId/pages', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    // Compress imageUrl if needed
-    const compressedImageUrl = await compressBase64(imageUrl);
-
-    if (!compressedImageUrl) {
-      return res.status(422).json({ error: 'Image too large to process.' });
-    }
-
+    // Image compression is now handled by the frontend
     const newPage = {
       id: generateId(),
       name,
-      imageUrl: compressedImageUrl,
+      imageUrl: imageUrl, // Already compressed by frontend
       originalUrl
     };
 
@@ -906,15 +775,8 @@ app.patch('/projects/:projectId/pages/:pageId', authenticateToken, async (req, r
       }
     }
 
-    // Compress images if updated
-    if (updates.imageUrl) {
-      updates.imageUrl = await compressBase64(updates.imageUrl);
-      if (!updates.imageUrl) return res.status(422).json({ error: 'Desktop image too large.' });
-    }
-    if (updates.mobileImageUrl) {
-      updates.mobileImageUrl = await compressBase64(updates.mobileImageUrl);
-      if (!updates.mobileImageUrl) return res.status(422).json({ error: 'Mobile image too large.' });
-    }
+    // Image compression is now handled by the frontend
+    // Images arrive already compressed to 200-500KB
 
     page.set(updates);
     await project.save();

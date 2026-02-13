@@ -5,11 +5,90 @@ import { fetchScreenshotAsBase64 } from '../services/screenshotService';
 import { refineText } from '../services/geminiService';
 import { Project, Pin, ProjectStatus, ProjectPage } from '../types';
 import { ArrowLeft, Share2, Sparkles, X, MapPin, Eye, Loader2, Image as ImageIcon, Trash2, Layout, Link as LinkIcon, Pencil, Monitor, Smartphone, ChevronDown, ChevronUp, Laptop } from 'lucide-react';
+import imageCompression from 'browser-image-compression';
 
 const SPECIAL_EMAILS = [
   'divyanshgupta5748@gmail.com',
   'divyanshgupta4949@gmail.com'
 ];
+
+/**
+ * Compress base64 image to target size (200-500KB) using browser-image-compression
+ * This replaces the backend compression for better performance on free-tier deployments
+ */
+const compressImageBase64 = async (base64String: string): Promise<string> => {
+  try {
+    // Check if it's a valid base64 image
+    if (!base64String || !base64String.startsWith('data:image')) {
+      return base64String;
+    }
+
+    console.log('[Frontend Compression] Starting compression...');
+    const startSize = (base64String.length * 3) / 4;
+    console.log(`[Frontend Compression] Original size: ${(startSize / 1024).toFixed(2)} KB`);
+
+    const startSizeKB = startSize / 1024;
+    // 🚀 Do NOT compress small images
+    if (startSizeKB <= 500) {
+      console.log('[Frontend Compression] Skipping compression (already under 500KB)');
+      return base64String;
+    }
+    // Convert base64 to Blob
+    const response = await fetch(base64String);
+    const blob = await response.blob();
+
+    // Target: 300-500KB
+    const TARGET_SIZE_KB = 300; // Aim for middle of range
+    const MAX_SIZE_KB = 500;
+
+    // Compression options with progressive quality reduction
+    const options = {
+      maxSizeMB: TARGET_SIZE_KB / 1024, // Convert KB to MB
+      maxWidthOrHeight: 2560, // Limit max dimension
+      useWebWorker: true,
+      fileType: 'image/webp' as const,
+      initialQuality: 0.95
+    };
+
+    let compressedBlob = await imageCompression(blob as File, options);
+
+    // ❌ Prevent over-compression
+    if (compressedBlob.size < 300 * 1024) {
+      console.log('[Frontend Compression] Result too small, keeping original');
+      return base64String;
+    }
+
+    // If still too large, try more aggressive compression
+    if (compressedBlob.size > MAX_SIZE_KB * 1024) {
+      console.log('[Frontend Compression] First pass too large, trying quality 0.6...');
+      options.initialQuality = 0.85;
+      compressedBlob = await imageCompression(blob as File, options);
+    }
+
+    // Final fallback - quality 0.4
+    if (compressedBlob.size > MAX_SIZE_KB * 1024) {
+      console.log('[Frontend Compression] Still too large, trying quality 0.4...');
+      options.initialQuality = 0.75;
+      compressedBlob = await imageCompression(blob as File, options);
+    }
+
+    // Convert compressed blob back to base64
+    const compressedBase64 = await new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.readAsDataURL(compressedBlob);
+    });
+
+    const finalSize = (compressedBase64.length * 3) / 4;
+    console.log(`[Frontend Compression] Final size: ${(finalSize / 1024).toFixed(2)} KB (${((1 - finalSize / startSize) * 100).toFixed(1)}% reduction)`);
+
+    return compressedBase64;
+  } catch (error) {
+    console.error('[Frontend Compression] Failed:', error);
+    // Return original if compression fails
+    return base64String;
+  }
+};
 
 interface ProjectEditorProps {
   projectId: string;
@@ -304,11 +383,16 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       throw new Error('Failed to capture screenshot');
     }
     const blob = await response.blob();
-    return new Promise<string>((resolve) => {
+    const base64 = await new Promise<string>((resolve) => {
       const reader = new FileReader();
       reader.onloadend = () => resolve(reader.result as string);
       reader.readAsDataURL(blob);
     });
+    
+    // Compress the screenshot on the frontend before sending to backend
+    console.log('[Screenshot] Compressing image on frontend...');
+    const compressed = await compressImageBase64(base64);
+    return compressed;
   };
 
   const handleAddFromUrl = async () => {
@@ -358,9 +442,13 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
           const base64String = reader.result as string;
           const name = file.name.split('.')[0].replace(/-|_/g, ' ');
           
+          // Compress the uploaded image before sending to backend
+          console.log('[Upload] Compressing uploaded image...');
+          const compressedImage = await compressImageBase64(base64String);
+          
           const newPage = await ApiService.addPage(project.id, {
             name,
-            imageUrl: base64String
+            imageUrl: compressedImage
           });
           
           const updatedProject = await ApiService.getProject(project.id);
