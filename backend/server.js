@@ -1040,11 +1040,13 @@ app.get('/take', async (req, res) => {
       // Attempt 2: Aggressive Compression (Quality 20)
       let compressed = await page.screenshot({ fullPage: true, type: 'webp', quality: 20 });
       
-      if (compressed.length <= TARGET_SIZE_BYTES) return compressed;
+      // Check if compression actually worked
+      if (compressed.length < buffer.length && compressed.length <= TARGET_SIZE_BYTES) {
+        console.log(`[Screenshot] > Compression successful: ${(compressed.length / 1024).toFixed(2)} KB`);
+        return compressed;
+      }
 
       console.warn(`[Screenshot] ⚠️ Still large (${(compressed.length / 1024 / 1024).toFixed(2)}MB). Resizing page...`);
-      // // Attempt 3: Max Compression (Quality 10)
-      // compressed = await page.screenshot({ fullPage: true, type: 'webp', quality: 10, captureBeyondViewport: true });
       
       // Attempt 3: Scale down the page (Zoom 0.6) + Quality 30
       await page.evaluate(() => {
@@ -1065,13 +1067,18 @@ app.get('/take', async (req, res) => {
       const viewport = page.viewport();
       return await page.screenshot({ 
           type: 'webp', 
-          quality: 10,
+          quality: 50,
           fullPage: false,
-          clip: { x: 0, y: 0, width: viewport.width, height: Math.min(5000, viewport.height) }
+          clip: { x: 0, y: 0, width: viewport.width, height: Math.min(4000, viewport.height) }
       });
     } catch (e) {
       console.warn('[Screenshot] Compression attempt failed', e);
-      return buffer; // Return original if compression fails
+      // If all else fails, return a viewport screenshot which is guaranteed to be small
+      try {
+         return await page.screenshot({ fullPage: false, type: 'webp', quality: 50 });
+      } catch (err) {
+         return buffer; // Return original if absolutely everything fails
+      }
     }
   };
 
@@ -1291,7 +1298,7 @@ app.get('/take', async (req, res) => {
     // 📏 Cap height to prevent OOM on infinite scroll pages (e.g. mobile views)
     if (scroll) try {
       await page.evaluate(() => {
-        const maxH = 15000; // 15k pixels max height
+        const maxH = 15000;
         if (document.body.scrollHeight > maxH) {
             document.body.style.height = maxH + 'px';
             document.body.style.overflow = 'hidden';
