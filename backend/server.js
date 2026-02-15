@@ -1404,7 +1404,7 @@ app.get('/take', async (req, res) => {
 
     console.log(`[Screenshot] ✅ ${type} screenshot captured successfully for ${url}`);
     res.set('Content-Type', 'image/webp');
-    return res.send(screenshot);
+    return res.send(Buffer.from(screenshot));
 
   } catch (err) {
     console.warn(`[Screenshot] ${type} failed for ${url}: ${err.message}`);
@@ -1432,7 +1432,7 @@ app.get('/take', async (req, res) => {
 
       console.log(`[Screenshot] ✅ Light Mode successful for ${url}`);
       res.set('Content-Type', 'image/webp');
-      return res.send(screenshot);
+      return res.send(Buffer.from(screenshot));
 
     } catch (retryErr) {
       console.error(`[Screenshot] Light Mode failed for ${url}: ${retryErr.message}`);
@@ -1458,7 +1458,7 @@ app.get('/take', async (req, res) => {
 
         console.log(`[Screenshot] ✅ Safe Mode screenshot captured for ${url}`);
         res.set('Content-Type', 'image/webp');
-        return res.send(safeScreenshot);
+        return res.send(Buffer.from(safeScreenshot));
       } catch (safeErr) {
         console.error(`[Screenshot] Safe Mode failed for ${url}: ${safeErr.message}`);
         let reason = 'UNKNOWN_FAILURE';

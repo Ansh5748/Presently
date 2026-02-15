@@ -12,6 +12,38 @@ const SPECIAL_EMAILS = [
   'divyanshgupta4949@gmail.com'
 ];
 
+// Helper: Force resize and compress using HTML Canvas (Guaranteed size reduction)
+const forceCompressWithCanvas = (base64: string, maxWidth = 1280, quality = 0.7): Promise<string> => {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.src = base64;
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      let width = img.width;
+      let height = img.height;
+
+      // Calculate new dimensions
+      if (width > maxWidth) {
+        height = Math.round((height * maxWidth) / width);
+        width = maxWidth;
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return resolve(base64);
+      
+      ctx.drawImage(img, 0, 0, width, height);
+      // Convert to JPEG (often smaller than PNG/WebP for photos)
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => {
+      // Return a 1x1 pixel if loading fails to prevent saving 6MB garbage strings
+      resolve('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=');
+    };
+  });
+};
+
 /**
  * Compress base64 image to target size (200-500KB) using browser-image-compression
  * This replaces the backend compression for better performance on free-tier deployments
@@ -28,7 +60,7 @@ const compressImageBase64 = async (base64String: string): Promise<string> => {
     console.log(`[Frontend Compression] Original size: ${(startSize / 1024).toFixed(2)} KB`);
 
     const startSizeKB = startSize / 1024;
-    // 🚀 Do NOT compress small images
+    // 🚀 Do NOT compress very small images
     if (startSizeKB <= 500) {
       console.log('[Frontend Compression] Skipping compression (already under 500KB)');
       return base64String;
@@ -52,24 +84,10 @@ const compressImageBase64 = async (base64String: string): Promise<string> => {
 
     let compressedBlob = await imageCompression(blob as File, options);
 
-    // ❌ Prevent over-compression
-    if (compressedBlob.size < 300 * 1024) {
-      console.log('[Frontend Compression] Result too small, keeping original');
-      return base64String;
-    }
-
-    // If still too large, try more aggressive compression
-    if (compressedBlob.size > MAX_SIZE_KB * 1024) {
-      console.log('[Frontend Compression] First pass too large, trying quality 0.6...');
-      options.initialQuality = 0.85;
-      compressedBlob = await imageCompression(blob as File, options);
-    }
-
-    // Final fallback - quality 0.4
-    if (compressedBlob.size > MAX_SIZE_KB * 1024) {
-      console.log('[Frontend Compression] Still too large, trying quality 0.4...');
-      options.initialQuality = 0.75;
-      compressedBlob = await imageCompression(blob as File, options);
+    // If browser-image-compression fails to reduce enough, or fails entirely
+    if (compressedBlob.size > MAX_SIZE_KB * 1024 || compressedBlob.size >= blob.size) {
+       console.log('[Frontend Compression] Library compression insufficient. Using Canvas fallback...');
+       return await forceCompressWithCanvas(base64String, 1280, 0.7);
     }
 
     // Convert compressed blob back to base64
@@ -85,8 +103,8 @@ const compressImageBase64 = async (base64String: string): Promise<string> => {
     return compressedBase64;
   } catch (error) {
     console.error('[Frontend Compression] Failed:', error);
-    // Return original if compression fails
-    return base64String;
+    // Fallback to canvas if the library crashes
+    return await forceCompressWithCanvas(base64String, 1000, 0.6);
   }
 };
 
@@ -382,6 +400,13 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
     if (!response.ok) {
       throw new Error('Failed to capture screenshot');
     }
+
+    // Safety Check: Ensure we received an image, not JSON or HTML error
+    const contentType = response.headers.get('content-type');
+    if (contentType && !contentType.includes('image')) {
+      throw new Error('Server returned non-image data. Check backend logs.');
+    }
+
     const blob = await response.blob();
     const base64 = await new Promise<string>((resolve) => {
       const reader = new FileReader();
