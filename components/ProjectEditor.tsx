@@ -3,6 +3,7 @@ import { StorageService } from '../services/storageService';
 import { ApiService } from '../services/apiService';
 import { fetchScreenshotAsBase64 } from '../services/screenshotService';
 import { refineText } from '../services/geminiService';
+import { SubscriptionModal } from './SubscriptionModal';
 import { Project, Pin, ProjectStatus, ProjectPage } from '../types';
 import { ArrowLeft, Share2, Sparkles, X, MapPin, Eye, Loader2, Image as ImageIcon, Trash2, Layout, Link as LinkIcon, Pencil, Monitor, Smartphone, ChevronDown, ChevronUp, Laptop } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
@@ -130,6 +131,9 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
   const [loadingStep, setLoadingStep] = useState('');
   const [loading, setLoading] = useState(true);
   const [showMobileScreens, setShowMobileScreens] = useState(false);
+  const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
+  const [subscriptionModalMode, setSubscriptionModalMode] = useState<'default' | 'expired' | 'subscribe'>('default');
+  const [showPendingModal, setShowPendingModal] = useState(false);
 
   // Permission State
   const [showPermissionModal, setShowPermissionModal] = useState(false);
@@ -223,6 +227,35 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
     }
     setShowPermissionModal(true);
     return false;
+  };
+
+  const checkSubscriptionAccess = async () => {
+    if (SPECIAL_EMAILS.includes(userEmail.toLowerCase())) return true;
+    
+    try {
+      const user = StorageService.getUser() as any;
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/subscription/status`, {
+        headers: { 'Authorization': `Bearer ${user.accessToken}` }
+      });
+      const status = await response.json();
+      
+      if (status.hasActiveSubscription) return true;
+      if (status.pendingVerification) {
+        setShowPendingModal(true);
+        return false;
+      }
+      if (status.isExpired) {
+        setSubscriptionModalMode('expired');
+        setShowSubscriptionModal(true);
+        return false;
+      }
+      
+      setSubscriptionModalMode('subscribe');
+      setShowSubscriptionModal(true);
+      return false;
+    } catch (e) {
+      return false;
+    }
   };
 
   const activePage = project?.pages.find(p => p.id === activePageId);
@@ -422,6 +455,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
 
   const handleAddFromUrl = async () => {
     if (!checkPermission()) return;
+    if (!(await checkSubscriptionAccess())) return;
 
     const url = prompt("Enter the URL of the page you want to capture:");
     if (!url || !project) return;
@@ -459,6 +493,11 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0] && project) {
+      if (!(await checkSubscriptionAccess())) {
+        if (fileInputRef.current) fileInputRef.current.value = '';
+        return;
+      }
+
       const file = e.target.files[0];
       const reader = new FileReader();
       
@@ -505,6 +544,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
 
     if (page.originalUrl) {
       if (!checkPermission()) return;
+      if (!(await checkSubscriptionAccess())) return;
 
       const originalUrl = page.originalUrl;
       const newUrlInput = prompt("Enter the new URL for this page:", originalUrl);
@@ -615,6 +655,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
     if (mode === 'mobile' && activePage && activePage.originalUrl && !(activePage as any).mobileImageUrl) {
       if (!checkPermission()) return;
     }
+    if (mode === 'mobile' && activePage && activePage.originalUrl && !(activePage as any).mobileImageUrl && !(await checkSubscriptionAccess())) return;
 
     setViewMode(mode);
     
@@ -724,6 +765,46 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
           </button>
         </div>
       </header>
+
+      {/* Pending Verification Modal */}
+      {showPendingModal && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md animate-in fade-in zoom-in-95">
+            <div className="text-center">
+              <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4 text-blue-600">
+                <Loader2 size={24} className="animate-spin" />
+              </div>
+              <h2 className="text-xl font-bold text-slate-900 mb-2">Verification in Progress</h2>
+              <p className="text-slate-600 mb-6">
+                We are verifying your payment. Once done, we will activate your plan.
+              </p>
+              <button 
+                onClick={() => setShowPendingModal(false)}
+                className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 py-2.5 rounded-lg font-medium transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Subscription Modal */}
+      {showSubscriptionModal && (
+        <SubscriptionModal
+          onClose={() => setShowSubscriptionModal(false)}
+          onSuccess={(isPending) => {
+            setShowSubscriptionModal(false);
+            if (isPending) {
+              setShowPendingModal(true);
+            }
+            // Refresh project or state if needed, but usually just closing is enough to let them try again
+          }}
+          userEmail={userEmail}
+          title={subscriptionModalMode === 'expired' ? 'Subscription Expired' : subscriptionModalMode === 'subscribe' ? 'Subscription Required' : undefined}
+          message={subscriptionModalMode === 'expired' ? 'Your subscription is expired. Buy another plan to continue working on project.' : subscriptionModalMode === 'subscribe' ? 'You are not subscribed. Choose a plan to create project.' : undefined}
+        />
+      )}
 
       {/* Permission Modal */}
       {showPermissionModal && (

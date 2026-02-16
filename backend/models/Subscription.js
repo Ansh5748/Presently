@@ -27,12 +27,12 @@ const subscriptionSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'active', 'expired', 'cancelled'],
+    enum: ['pending', 'active', 'expired', 'cancelled', 'pending_verification', 'rejected'],
     default: 'pending'
   },
   paymentMethod: {
     type: String,
-    enum: ['razorpay', 'paypal', 'upi', 'auto_approved'],
+    enum: ['razorpay', 'paypal', 'upi', 'auto_approved', 'manual'],
     required: true
   },
   paymentId: String,
@@ -42,6 +42,9 @@ const subscriptionSchema = new mongoose.Schema({
   isAutoApproved: {
     type: Boolean,
     default: false
+  },
+  adminMessage: {
+    type: String
   },
   createdAt: {
     type: Date,

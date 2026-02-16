@@ -458,6 +458,35 @@ app.get('/subscription/status', authenticateToken, async (req, res) => {
       });
     }
 
+    // Check for pending verification
+    const pendingSubscription = await Subscription.findOne({
+      userId,
+      status: 'pending_verification'
+    }).sort({ createdAt: -1 });
+
+    if (pendingSubscription) {
+      return res.json({ 
+        hasActiveSubscription: false,
+        pendingVerification: true,
+        subscription: pendingSubscription
+      });
+    }
+
+    // Check for expired subscription
+    const expiredSubscription = await Subscription.findOne({
+      userId,
+      status: { $in: ['active', 'expired'] },
+      expiresAt: { $lte: new Date() }
+    }).sort({ expiresAt: -1 });
+
+    if (expiredSubscription) {
+      return res.json({ 
+        hasActiveSubscription: false,
+        isExpired: true,
+        subscription: expiredSubscription
+      });
+    }
+
     res.json({ hasActiveSubscription: false });
 
   } catch (error) {
@@ -569,12 +598,27 @@ app.post('/subscription/create-order', authenticateToken, async (req, res) => {
       });
     } else {
       // Custom payment method (manual)
+      const manualOrderId = `manual_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      const subscription = new Subscription({
+        userId,
+        email: userEmail,
+        plan,
+        currency,
+        amount,
+        status: 'pending',
+        paymentMethod: 'manual',
+        orderId: manualOrderId
+      });
+      await subscription.save();
+
       res.json({ 
         customPayment: true,
-        upiId: process.env.UPI_ID,
-        paypalUsername: process.env.PAYPAL_USERNAME,
+        upiId: currency === 'INR' ? process.env.UPI_ID : undefined,
+        paypalUsername: currency !== 'INR' ? process.env.PAYPAL_USERNAME : undefined,
         amount,
-        currency
+        currency,
+        orderId: manualOrderId
       });
     }
 
@@ -589,6 +633,23 @@ app.post('/subscription/verify-payment', authenticateToken, async (req, res) => 
   try {
     const { orderId, paymentId, signature } = req.body;
     const userId = req.user.id;
+
+    // Handle Manual Payment Verification
+    if (orderId && orderId.startsWith('manual_')) {
+      const subscription = await Subscription.findOne({ userId, orderId, status: 'pending' });
+      if (!subscription) {
+        return res.status(404).json({ error: 'Subscription not found' });
+      }
+
+      // For manual payments, set status to pending_verification instead of active
+      subscription.status = 'pending_verification';
+      subscription.paymentId = paymentId || 'manual_pending_' + Date.now();
+      // Note: startDate and expiresAt will be set upon admin approval
+      await subscription.save();
+
+      console.log('[Payment] Manual Subscription pending verification for user:', userId);
+      return res.json({ success: true, subscription, message: 'Payment verification pending. We will verify your payment and activate your plan shortly.' });
+    }
 
     // Verify signature
     const hmac = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET);
@@ -619,6 +680,177 @@ app.post('/subscription/verify-payment', authenticateToken, async (req, res) => 
   } catch (error) {
     console.error('[Verify Payment] Error:', error);
     res.status(500).json({ error: 'Payment verification failed' });
+  }
+});
+
+// ==================== ADMIN ROUTES ====================
+
+// Admin: Get pending subscriptions
+app.get('/admin/subscriptions/pending', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.email !== 'divyanshgupta5748@gmail.com') {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    const subscriptions = await Subscription.find({ status: 'pending_verification' })
+      .populate('userId', 'name email')
+      .sort({ createdAt: -1 });
+    res.json(subscriptions);
+  } catch (error) {
+    console.error('[Admin Pending Subs] Error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Admin: Verify subscription (Approve/Reject)
+app.post('/admin/subscriptions/:id/verify', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.email !== 'divyanshgupta5748@gmail.com') {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    const { status, message } = req.body; // status: 'approve' or 'reject'
+    const subscription = await Subscription.findById(req.params.id);
+    
+    if (!subscription) {
+      return res.status(404).json({ error: 'Subscription not found' });
+    }
+
+    if (status === 'approve') {
+      const duration = subscription.plan === '1_month' ? 30 : subscription.plan === '6_month' ? 180 : 365;
+      subscription.status = 'active';
+      subscription.startDate = new Date();
+      subscription.expiresAt = new Date(Date.now() + duration * 24 * 60 * 60 * 1000);
+      subscription.adminMessage = message || 'Your subscription has been approved.';
+    } else if (status === 'reject') {
+      subscription.status = 'rejected';
+      subscription.adminMessage = message || 'Your subscription request was rejected. Please contact support.';
+    } else {
+      return res.status(400).json({ error: 'Invalid status action' });
+    }
+
+    await subscription.save();
+    
+    // TODO: Integrate emailService here to notify the user about the status change
+    
+    res.json({ success: true, subscription });
+  } catch (error) {
+    console.error('[Admin Verify Sub] Error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Admin: Get stats
+app.get('/admin/stats', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.email !== 'divyanshgupta5748@gmail.com') {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const totalUsers = await User.countDocuments();
+    const activeSubscriptions = await Subscription.countDocuments({ status: 'active', expiresAt: { $gt: new Date() } });
+    const pendingManual = await Subscription.countDocuments({ status: 'pending_verification' });
+    
+    // Calculate revenue (approximate)
+    const paidSubs = await Subscription.find({ status: 'active', amount: { $gt: 0 } });
+    const revenue = paidSubs.reduce((acc, sub) => acc + (sub.currency === 'USD' ? sub.amount * 83 : sub.amount), 0);
+
+    res.json({
+      totalUsers,
+      activeSubscriptions,
+      pendingManual,
+      revenue: Math.round(revenue)
+    });
+  } catch (error) {
+    console.error('[Admin Stats] Error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Admin: Get all subscriptions
+app.get('/admin/subscriptions', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.email !== 'divyanshgupta5748@gmail.com') {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    const subscriptions = await Subscription.find({})
+      .populate('userId', 'name email')
+      .sort({ createdAt: -1 })
+      .limit(100);
+    res.json(subscriptions);
+  } catch (error) {
+    console.error('[Admin Subs] Error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Admin: Cancel subscription
+app.post('/admin/subscriptions/cancel', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.email !== 'divyanshgupta5748@gmail.com') {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    const { subscriptionId } = req.body;
+    
+    // Use findByIdAndUpdate to bypass Mongoose validation on existing invalid documents (like admin_grant plans)
+    const subscription = await Subscription.findByIdAndUpdate(
+      subscriptionId,
+      { status: 'cancelled', adminMessage: 'Subscription cancelled by admin.' },
+      { new: true }
+    );
+    
+    if (!subscription) {
+      return res.status(404).json({ error: 'Subscription not found' });
+    }
+
+    res.json({ success: true, message: 'Subscription cancelled' });
+  } catch (error) {
+    console.error('[Admin Cancel Sub] Error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Admin: Grant subscription
+app.post('/admin/subscriptions/grant', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.email !== 'divyanshgupta5748@gmail.com') {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    const { email, plan, durationDays } = req.body;
+    
+    const user = await User.findOne({ email: email.toLowerCase() });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Deactivate existing active subscriptions
+    await Subscription.updateMany(
+      { userId: user._id, status: 'active' },
+      { status: 'cancelled', adminMessage: 'Replaced by admin grant' }
+    );
+
+    const subscriptionData = {
+      userId: user._id,
+      email: user.email,
+      plan: plan || 'admin_grant',
+      currency: 'INR',
+      amount: 0,
+      status: 'active',
+      paymentMethod: 'auto_approved',
+      paymentId: 'admin_grant_' + Date.now(),
+      startDate: new Date(),
+      expiresAt: new Date(Date.now() + (durationDays || 30) * 24 * 60 * 60 * 1000),
+      isAutoApproved: true,
+      adminMessage: 'Granted by admin',
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    // Use MongoDB driver directly to bypass Mongoose validation for 'admin_grant' enum
+    const result = await Subscription.collection.insertOne(subscriptionData);
+    res.json({ success: true, subscription: { ...subscriptionData, _id: result.insertedId } });
+
+  } catch (error) {
+    console.error('[Admin Grant Sub] Error:', error);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
@@ -681,6 +913,21 @@ app.post('/projects', authenticateToken, async (req, res) => {
       });
 
       if (!activeSubscription) {
+        // Check for pending verification
+        const pendingSubscription = await Subscription.findOne({
+          userId,
+          status: 'pending_verification'
+        });
+        if (pendingSubscription) return res.status(403).json({ error: 'Payment verification pending', pendingVerification: true });
+
+        // Check for expired subscription
+        const expiredSubscription = await Subscription.findOne({
+          userId,
+          status: { $in: ['active', 'expired'] },
+          expiresAt: { $lte: new Date() }
+        });
+        if (expiredSubscription) return res.status(403).json({ error: 'Subscription expired', isExpired: true });
+
         return res.status(403).json({ 
           error: 'Active subscription required', 
           requiresSubscription: true 
@@ -721,10 +968,37 @@ app.post('/projects/:projectId/pages', authenticateToken, async (req, res) => {
     const { projectId } = req.params;
     const { name, imageUrl, originalUrl } = req.body;
     const userId = req.user.id;
+    const userEmail = req.user.email;
 
     const project = await Project.findOne({ id: projectId, userId });
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
+    }
+
+    // Check subscription for adding pages (skip for special emails)
+    if (FREE_EMAILS[userEmail] !== 'skip') {
+      const activeSubscription = await Subscription.findOne({
+        userId,
+        status: 'active',
+        expiresAt: { $gt: new Date() }
+      });
+
+      if (!activeSubscription) {
+        const pendingSubscription = await Subscription.findOne({
+          userId,
+          status: 'pending_verification'
+        });
+        if (pendingSubscription) return res.status(403).json({ error: 'Payment verification pending', pendingVerification: true });
+
+        const expiredSubscription = await Subscription.findOne({
+          userId,
+          status: { $in: ['active', 'expired'] },
+          expiresAt: { $lte: new Date() }
+        });
+        if (expiredSubscription) return res.status(403).json({ error: 'Subscription expired', isExpired: true });
+
+        return res.status(403).json({ error: 'Active subscription required', requiresSubscription: true });
+      }
     }
 
     // Image compression is now handled by the frontend

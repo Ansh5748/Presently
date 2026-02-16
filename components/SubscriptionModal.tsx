@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { X, Check, Loader2, CreditCard, Sparkles } from 'lucide-react';
+import { X, Check, Loader2, CreditCard, Sparkles, Copy } from 'lucide-react';
 
 interface SubscriptionModalProps {
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (isPending?: boolean) => void;
   userEmail: string;
+  title?: string;
+  message?: string;
 }
 
 // Load Razorpay script
@@ -18,7 +20,7 @@ const loadRazorpayScript = () => {
   });
 };
 
-export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ onClose, onSuccess, userEmail }) => {
+export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ onClose, onSuccess, userEmail, title, message }) => {
   const [selectedPlan, setSelectedPlan] = useState<'1_month' | '6_month' | '12_month'>('1_month');
   const [selectedCurrency, setSelectedCurrency] = useState<'USD' | 'INR'>('USD');
   const [couponCode, setCouponCode] = useState('');
@@ -26,6 +28,13 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ onClose, o
   const [discount, setDiscount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [manualPaymentData, setManualPaymentData] = useState<{
+    upiId?: string;
+    paypalUsername?: string;
+    amount: number;
+    currency: string;
+    orderId: string;
+  } | null>(null);
 
   const plans = {
     USD: {
@@ -96,7 +105,20 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ onClose, o
       // Check if auto-approved (for special email)
       if (orderData.autoApproved) {
         alert(orderData.message || 'Subscription activated!');
-        onSuccess();
+        onSuccess(false);
+        return;
+      }
+
+      // Check if custom/manual payment
+      if (orderData.customPayment) {
+        setManualPaymentData({
+          upiId: orderData.upiId,
+          paypalUsername: orderData.paypalUsername,
+          amount: orderData.amount,
+          currency: orderData.currency,
+          orderId: orderData.orderId
+        });
+        setLoading(false);
         return;
       }
 
@@ -135,7 +157,7 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ onClose, o
             }
 
             alert('Subscription activated successfully!');
-            onSuccess();
+            onSuccess(false);
           } catch (err: any) {
             setError(err.message);
             setLoading(false);
@@ -161,6 +183,43 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ onClose, o
     }
   };
 
+  const handleManualVerify = async () => {
+    if (!manualPaymentData) return;
+    setLoading(true);
+    try {
+      const userData = localStorage.getItem('presently_user');
+      if (!userData) throw new Error('Please login first');
+      const { accessToken } = JSON.parse(userData);
+
+      const verifyResponse = await fetch(`${import.meta.env.VITE_API_URL}/subscription/verify-payment`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({
+          orderId: manualPaymentData.orderId,
+          paymentId: 'manual_verification_' + Date.now()
+        })
+      });
+
+      const verifyData = await verifyResponse.json();
+
+      if (!verifyResponse.ok) {
+        throw new Error(verifyData.error || 'Payment verification failed');
+      }
+
+      alert(verifyData.message || 'Subscription activated successfully!');
+      onSuccess(true);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const isManualPayment = !!manualPaymentData;
+
   return (
     <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 backdrop-blur-sm p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -169,10 +228,10 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ onClose, o
           <div className="flex justify-between items-start">
             <div>
               <h2 className="text-xl md:text-2xl font-bold flex items-center gap-2">
-                <Sparkles size={24} />
-                Unlock Unlimited Projects
+                {isManualPayment ? <CreditCard size={24} /> : <Sparkles size={24} />}
+                {isManualPayment ? 'Complete Payment' : (title || 'Unlock Unlimited Projects')}
               </h2>
-              <p className="text-blue-100 mt-1">Choose a plan that works for you</p>
+              <p className="text-blue-100 mt-1">{isManualPayment ? 'Please complete the transfer below' : (message || 'Choose a plan that works for you')}</p>
             </div>
             <button onClick={onClose} className="text-white hover:bg-white/20 p-2 rounded-lg transition">
               <X size={20} />
@@ -188,7 +247,55 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ onClose, o
             </div>
           )}
 
-          {/* Currency Toggle */}
+          {isManualPayment ? (
+            <div className="space-y-6">
+              <div className="bg-slate-50 p-6 rounded-xl border border-slate-200">
+                <h3 className="font-semibold text-slate-900 mb-4">Payment Details</h3>
+                
+                <div className="space-y-4">
+                  <div className="flex justify-between items-center pb-4 border-b border-slate-200">
+                    <span className="text-slate-600">Amount to Pay</span>
+                    <span className="text-2xl font-bold text-slate-900">
+                      {manualPaymentData.currency === 'USD' ? '$' : '₹'}{manualPaymentData.amount}
+                    </span>
+                  </div>
+
+                  {manualPaymentData.upiId && (
+                    <div>
+                      <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">UPI ID</label>
+                      <div className="flex items-center gap-2 mt-1">
+                        <code className="bg-white px-3 py-2 rounded-lg border border-slate-300 flex-1 font-mono text-slate-800">
+                          {manualPaymentData.upiId}
+                        </code>
+                        <button 
+                          onClick={() => navigator.clipboard.writeText(manualPaymentData.upiId!)}
+                          className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                          title="Copy UPI ID"
+                        >
+                          <Copy size={20} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {manualPaymentData.paypalUsername && (
+                    <div>
+                      <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">PayPal</label>
+                      <div className="mt-1 text-slate-900 font-medium">
+                        Send to: {manualPaymentData.paypalUsername}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <p className="text-sm text-slate-600 text-center">
+                After completing the payment, click the button below to activate your subscription.
+              </p>
+            </div>
+          ) : (
+            <>
+          {/* Currency Toggle - Only show if not in manual payment mode */}
           <div className="flex gap-2 bg-slate-100 p-1 rounded-lg w-fit mx-auto">
             <button
               onClick={() => setSelectedCurrency('USD')}
@@ -226,7 +333,7 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ onClose, o
                 >
                   {isBestValue && (
                     <div className="absolute -top-3 left-1/2 transform -translate-x-1/2">
-                      <span className="bg-green-500 text-white text-xs font-bold px-3 py-1 rounded-full">
+                      <span className="bg-green-500 text-white text-xs font-bold px-3 py-1 rounded-full whitespace-nowrap">
                         BEST VALUE
                       </span>
                     </div>
@@ -296,10 +403,12 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ onClose, o
               <span>{selectedCurrency === 'USD' ? '$' : '₹'}{finalPrice}</span>
             </div>
           </div>
+            </>
+          )}
 
           {/* Subscribe Button */}
           <button
-            onClick={handleSubscribe}
+            onClick={isManualPayment ? handleManualVerify : handleSubscribe}
             disabled={loading}
             className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-6 py-4 rounded-xl font-bold text-lg shadow-lg transition disabled:opacity-50"
           >
@@ -310,15 +419,15 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ onClose, o
               </>
             ) : (
               <>
-                <CreditCard size={20} />
-                Subscribe Now
+                {isManualPayment ? <Check size={20} /> : <CreditCard size={20} />}
+                {isManualPayment ? 'I Have Made the Payment' : 'Subscribe Now'}
               </>
             )}
           </button>
 
-          <p className="text-xs text-center text-slate-500">
+          {!isManualPayment && <p className="text-xs text-center text-slate-500">
             Secure payment powered by Razorpay. Cancel anytime.
-          </p>
+          </p>}
         </div>
       </div>
     </div>
