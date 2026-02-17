@@ -326,12 +326,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
     <div className="max-w-6xl mx-auto px-4 py-12">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 md:mb-10 gap-4 md:gap-0">
         <div>
-          <div className="flex items-center gap-3 mb-1">
+          <div className="flex flex-wrap items-center gap-3 mb-1">
           <img src={logoImg} alt="Presently Logo" className="h-12 w-auto object-contain" />
           <h1 className="text-3xl font-bold text-slate-900">Projects</h1>
           <p className="text-slate-500 mt-1">Welcome, <span className="font-medium text-slate-600">{userName || 'Guest'}</span></p>
           {!loadingSubscription && !hasActiveSubscription && !pendingVerification && (
-            <p className="text-amber-600 text-sm mt-1 flex items-center gap-1">
+            <p className="w-full sm:w-auto text-amber-600 text-sm mt-1 flex items-center gap-1">
               <Crown size={14} />
               Subscribe to create unlimited projects
             </p>
