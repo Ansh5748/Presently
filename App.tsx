@@ -45,7 +45,6 @@ export const App: React.FC = () => {
   };
 
   const handleLogout = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' });
     StorageService.clearUser();
     setUser(null);
     handleNavigate('/login');

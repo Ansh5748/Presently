@@ -259,9 +259,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
     } catch (error) {
       console.error('Logout error:', error);
     }
-    StorageService.clearUser();
     onLogout();
-    onNavigate('/login');
   };
 
   const handleAdminVerify = async (subId: string, status: 'approve' | 'reject') => {
