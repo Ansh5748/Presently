@@ -655,7 +655,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
             <h3 className="font-bold text-slate-900 mb-4 flex items-center justify-center md:justify-start gap-2">
               <Mail size={18} /> Contact
             </h3>
-            <a href="mailto:divyanshgupta5748@gmail.com" className="text-slate-600 hover:text-blue-600 text-sm">
+            <a href="mailto:dishlook.contact@gmail.com" className="text-slate-600 hover:text-blue-600 text-sm">
               Contact Support
             </a>
           </div>
