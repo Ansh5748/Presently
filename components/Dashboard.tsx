@@ -250,6 +250,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
     }
   };
 
+  const handleLogout = async () => {
+    try {
+      await fetch(`${import.meta.env.VITE_API_URL}/auth/logout`, {
+        method: 'POST',
+        credentials: 'include'
+      });
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
+    StorageService.clearUser();
+    onNavigate('/login');
+  };
+
   const handleAdminVerify = async (subId: string, status: 'approve' | 'reject') => {
     try {
       const user = StorageService.getUser() as any;
@@ -358,7 +371,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
             New Project
           </button>
           <button 
-            onClick={onLogout}
+            onClick={handleLogout}
             className="flex items-center gap-2 text-slate-500 hover:text-red-600 px-3 py-2.5 rounded-lg transition-all text-sm font-medium sm:ml-0"
             title="Logout"
           >
