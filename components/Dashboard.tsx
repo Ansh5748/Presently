@@ -260,6 +260,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
       console.error('Logout error:', error);
     }
     StorageService.clearUser();
+    onLogout();
     onNavigate('/login');
   };
 
