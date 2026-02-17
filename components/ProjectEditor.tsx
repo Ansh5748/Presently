@@ -1053,7 +1053,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
                     <button 
                       onClick={handleRefineWithAI}
                       disabled={aiLoading || !tempPin.description}
-                      className="text-xs flex items-center gap-1 text-purple-600 hover:text-purple-700 font-medium disabled:opacity-50"
+                      className="hidden text-xs flex items-center gap-1 text-purple-600 hover:text-purple-700 font-medium disabled:opacity-50"
                     >
                       <Sparkles size={12} />
                       {aiLoading ? 'Refining...' : 'AI Rewrite'}
