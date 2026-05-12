@@ -41,4 +41,4 @@ npm install
 npm start
 ```
 
-Your application will now be running, with the frontend accessible at `http://localhost:5173` and the backend service running on `http://localhost:3001`.
+Your application will now be running, with the frontend accessible at `http://localhost:5173` and the backend service running on `http://localhost:3001`..
