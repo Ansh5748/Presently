@@ -4,8 +4,9 @@ import { ApiService } from '../services/apiService';
 import { fetchScreenshotAsBase64 } from '../services/screenshotService';
 import { refineText } from '../services/geminiService';
 import { SubscriptionModal } from './SubscriptionModal';
-import { Project, Pin, ProjectStatus, ProjectPage } from '../types';
-import { ArrowLeft, Share2, Sparkles, X, MapPin, Eye, Loader2, Image as ImageIcon, Trash2, Layout, Link as LinkIcon, Pencil, Monitor, Smartphone, ChevronDown, ChevronUp, Laptop } from 'lucide-react';
+import { AnnotationIssueModal } from './AnnotationIssueModal';
+import { Project, Pin, ProjectStatus, ProjectPage, AnnotationIssue } from '../types';
+import { ArrowLeft, Share2, Sparkles, X, MapPin, Eye, Loader2, Image as ImageIcon, Trash2, Layout, Link as LinkIcon, Pencil, Monitor, Smartphone, ChevronDown, ChevronUp, Laptop, Search, SlidersHorizontal, AlertCircle, MessageSquare } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
 
 const SPECIAL_EMAILS = [
@@ -134,6 +135,26 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
   const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
   const [subscriptionModalMode, setSubscriptionModalMode] = useState<'default' | 'expired' | 'subscribe'>('default');
   const [showPendingModal, setShowPendingModal] = useState(false);
+  const [showIssueModal, setShowIssueModal] = useState(false);
+  const [issueModalPin, setIssueModalPin] = useState<Pin | null>(null);
+  const [isGroupMember, setIsGroupMember] = useState(false);
+  const [isPMorOwner, setIsPMorOwner] = useState(false);
+  const [isTeamMember, setIsTeamMember] = useState(false);
+  const [canAssignFilterAssignees, setCanAssignFilterAssignees] = useState(false);
+  const [assigneeOptions, setAssigneeOptions] = useState<{ id: string; name: string; avatarUrl?: string; designation?: string }[]>([]);
+
+  // Search & Filter Drawer State
+  const [showSearchDrawer, setShowSearchDrawer] = useState(false);
+  const [issueSearchQuery, setIssueSearchQuery] = useState('');
+  const [issueStatusFilter, setIssueStatusFilter] = useState<string>('all');
+  const [issueLabelFilter, setIssueLabelFilter] = useState<string>('all');
+  const [issueSortBy, setIssueSortBy] = useState<'earliest' | 'latest' | 'number'>('latest');
+  const [issueAssigneeFilter, setIssueAssigneeFilter] = useState<string>('all');
+  const [issueDeviceFilter, setIssueDeviceFilter] = useState<'all' | 'desktop' | 'mobile'>('all');
+  const [issueTypeFilter, setIssueTypeFilter] = useState<'all' | 'issue' | 'comment'>('all');
+  const [projectIssues, setProjectIssues] = useState<AnnotationIssue[]>([]);
+  const searchDrawerRef = useRef<HTMLDivElement>(null);
+  const mainScrollRef = useRef<HTMLDivElement>(null);
 
   // Permission State
   const [showPermissionModal, setShowPermissionModal] = useState(false);
@@ -143,6 +164,231 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
+
+  const currentUserId = (() => {
+    try {
+      const u = localStorage.getItem('presently_user');
+      if (!u) return '';
+      const parsed = JSON.parse(u);
+      return (parsed.userId || parsed.id || '').toString();
+    } catch { return ''; }
+  })();
+
+  const isProjectOwnerOrAdminOrPMOrQA = (() => {
+    if (!project) return false;
+    if (project.userId === currentUserId) return true;
+    if (isPMorOwner) return true;
+    if (SPECIAL_EMAILS.includes(userEmail.toLowerCase())) return true;
+    return false;
+  })();
+
+  const refreshProjectIssues = async (pid?: string) => {
+    const id = pid || project?.id;
+    if (!id) return;
+    try {
+      const issuesData = await ApiService.getProjectIssues(id);
+      setProjectIssues(issuesData);
+    } catch { setProjectIssues([]); }
+  };
+
+  const accessibleIssues = (() => {
+    if (isProjectOwnerOrAdminOrPMOrQA || canAssignFilterAssignees) return projectIssues;
+    return projectIssues.filter(iss => {
+      const assigneeId = iss.assigneeId ? (typeof iss.assigneeId === 'object' ? iss.assigneeId._id : iss.assigneeId) : '';
+      return assigneeId?.toString() === currentUserId;
+    });
+  })();
+
+  const canSeePin = (pin: Pin): boolean => {
+    if (isProjectOwnerOrAdminOrPMOrQA || canAssignFilterAssignees) return true;
+    const pinType = pin.type || 'issue';
+    if (pinType === 'comment') {
+      return true;
+    }
+    const iss = projectIssues.find(i => i.pinId === pin.id);
+    if (!iss) return false;
+    const assigneeId = iss.assigneeId ? (typeof iss.assigneeId === 'object' ? iss.assigneeId._id : iss.assigneeId) : '';
+    return assigneeId?.toString() === currentUserId;
+  };
+
+  const availableLabels = Array.from(new Set(accessibleIssues.flatMap(iss => iss.labels || [])));
+
+  const uniqueAssigneesFromIssues = (() => {
+    const seen = new Map<string, { id: string; name: string; designation?: string }>();
+    accessibleIssues.forEach(iss => {
+      if (!iss.assigneeId) return;
+      const id = typeof iss.assigneeId === 'object' ? (iss.assigneeId as any)._id || (iss.assigneeId as any).id : iss.assigneeId;
+      if (!id) return;
+      const idStr = id.toString();
+      if (seen.has(idStr)) return;
+      const name = typeof iss.assigneeId === 'object' ? (iss.assigneeId as any).name : assigneeOptions.find(a => a.id === idStr)?.name || 'Assignee';
+      const designation = typeof iss.assigneeId === 'object' ? (iss.assigneeId as any).designation : assigneeOptions.find(a => a.id === idStr)?.designation;
+      seen.set(idStr, { id: idStr, name, designation });
+    });
+    assigneeOptions.forEach(a => {
+      if (!seen.has(a.id)) seen.set(a.id, { id: a.id, name: a.name, designation: a.designation });
+    });
+    return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
+  })();
+
+  const filteredAndSortedIssues = (() => {
+    let list = accessibleIssues.slice();
+
+    const q = issueSearchQuery.trim().toLowerCase();
+    if (q) {
+      list = list.filter(iss => {
+        const pin = pins.find(p => p.id === iss.pinId);
+        const titleMatch = (pin?.title || '').toLowerCase().includes(q);
+        const descMatch = (pin?.description || '').toLowerCase().includes(q);
+        const numMatch = pin ? `#${pin.number}`.includes(q) || pin.number.toString() === q : false;
+        const statusMatch = iss.status.toLowerCase().includes(q);
+        const labelMatch = (iss.labels || []).some(l => l.toLowerCase().includes(q));
+        const assigneeName = (typeof iss.assigneeId === 'object' ? iss.assigneeId?.name : '').toLowerCase();
+        return titleMatch || descMatch || numMatch || statusMatch || labelMatch || assigneeName.includes(q);
+      });
+    }
+
+    if (issueStatusFilter !== 'all') {
+      list = list.filter(iss => iss.status === issueStatusFilter);
+    }
+
+    if (issueLabelFilter !== 'all') {
+      list = list.filter(iss => (iss.labels || []).includes(issueLabelFilter));
+    }
+
+    if (issueAssigneeFilter !== 'all') {
+      list = list.filter(iss => {
+        const id = iss.assigneeId ? (typeof iss.assigneeId === 'object' ? (iss.assigneeId as any)._id || (iss.assigneeId as any).id : iss.assigneeId)?.toString() : '';
+        if (issueAssigneeFilter === 'unassigned') return !id;
+        return id === issueAssigneeFilter;
+      });
+    }
+
+    if (issueDeviceFilter !== 'all') {
+      list = list.filter(iss => {
+        const pin = pins.find(p => p.id === iss.pinId);
+        if (!pin) return false;
+        const dev = pin.device || 'desktop';
+        return dev === issueDeviceFilter;
+      });
+    }
+
+    if (issueTypeFilter !== 'all') {
+      list = list.filter(iss => {
+        const pin = pins.find(p => p.id === iss.pinId);
+        const pinType = pin?.type || 'issue';
+        return pinType === issueTypeFilter;
+      });
+    }
+
+    list.sort((a, b) => {
+      const pinA = pins.find(p => p.id === a.pinId);
+      const pinB = pins.find(p => p.id === b.pinId);
+      if (issueSortBy === 'earliest') {
+        return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      }
+      if (issueSortBy === 'number') {
+        return (pinA?.number || 0) - (pinB?.number || 0);
+      }
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+
+    return list;
+  })();
+
+  const accessibleComments = (() => {
+    return pins.filter(p => p.type === 'comment');
+  })();
+
+  const filteredAndSortedItems = (() => {
+    const issueItems = filteredAndSortedIssues.filter(iss => {
+      const p = pins.find(pp => pp.id === iss.pinId);
+      return (p?.type || 'issue') === 'issue';
+    }).map(iss => {
+      const pin = pins.find(p => p.id === iss.pinId);
+      return { kind: 'issue' as const, issue: iss, pin, id: `issue-${iss.id}` };
+    });
+    const commentPins = accessibleComments.filter(pin => {
+      if (issueSearchQuery.trim()) {
+        const q = issueSearchQuery.trim().toLowerCase();
+        const titleMatch = (pin.title || '').toLowerCase().includes(q);
+        const descMatch = (pin.description || '').toLowerCase().includes(q);
+        const numMatch = `#${pin.number}`.includes(q) || pin.number.toString() === q;
+        if (!(titleMatch || descMatch || numMatch)) return false;
+      }
+      if (issueDeviceFilter !== 'all') {
+        const dev = pin.device || 'desktop';
+        if (dev !== issueDeviceFilter) return false;
+      }
+      if (issueTypeFilter !== 'all' && issueTypeFilter !== 'comment') return false;
+      if (issueAssigneeFilter !== 'all' && issueAssigneeFilter !== 'unassigned') return false;
+      if (issueStatusFilter !== 'all') return false;
+      if (issueLabelFilter !== 'all') return false;
+      return true;
+    }).map(pin => ({ kind: 'comment' as const, pin, id: `comment-${pin.id}` }));
+
+    const combined = [...issueItems, ...commentPins];
+    combined.sort((a, b) => {
+      const pinA = a.pin;
+      const pinB = b.pin;
+      if (!pinA || !pinB) return 0;
+      if (issueSortBy === 'number') {
+        return (pinA.number || 0) - (pinB.number || 0);
+      }
+      if (issueSortBy === 'earliest') {
+        const aTime = a.kind === 'issue' ? new Date(a.issue.createdAt).getTime() : new Date((pinA as any).createdAt || 0).getTime();
+        const bTime = b.kind === 'issue' ? new Date(b.issue.createdAt).getTime() : new Date((pinB as any).createdAt || 0).getTime();
+        return aTime - bTime;
+      }
+      const aTime = a.kind === 'issue' ? new Date(a.issue.createdAt).getTime() : new Date((pinA as any).createdAt || 0).getTime();
+      const bTime = b.kind === 'issue' ? new Date(b.issue.createdAt).getTime() : new Date((pinB as any).createdAt || 0).getTime();
+      return bTime - aTime;
+    });
+    return combined;
+  })();
+
+  const handleSelectIssueFromDrawer = (issue: AnnotationIssue) => {
+    setShowSearchDrawer(false);
+    const targetPin = pins.find(p => p.id === issue.pinId);
+    if (!targetPin) return;
+
+    if (targetPin.pageId && targetPin.pageId !== activePageId) {
+      setActivePageId(targetPin.pageId);
+    }
+
+    const pinDevice = (targetPin.device || 'desktop') as 'desktop' | 'mobile';
+    if (pinDevice !== viewMode) {
+      handleViewModeChange(pinDevice);
+    }
+
+    setSelectedPinId(targetPin.id);
+
+    const tryScroll = (retries = 0) => {
+      if (!mainScrollRef.current && !imageRef.current) {
+        if (retries < 15) setTimeout(() => tryScroll(retries + 1), 100);
+        return;
+      }
+      const pinEl = document.querySelector(`[data-pin-id="${targetPin.id}"]`) as HTMLElement | null;
+      const imageEl = imageRef.current;
+      if (pinEl) {
+        pinEl.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+      } else if (imageEl) {
+        imageEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else if (mainScrollRef.current) {
+        mainScrollRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+      if (!pinEl && retries < 10) setTimeout(() => tryScroll(retries + 1), 150);
+    };
+    setTimeout(() => tryScroll(), 200);
+
+    const pinType = targetPin.type || 'issue';
+    if (pinType === 'issue') {
+      setIssueModalPin(targetPin);
+      setShowIssueModal(true);
+    } else {
+      openPinEditor(targetPin);
+    }
+  };
 
   useEffect(() => {
     const user = StorageService.getUser() as any;
@@ -164,6 +410,44 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
 
       const pinsData = await ApiService.getPins(projectId);
       setPins(pinsData);
+
+      try {
+        const issuesData = await ApiService.getProjectIssues(projectId);
+        setProjectIssues(issuesData);
+      } catch { setProjectIssues([]); }
+
+      try {
+        const assigneeData = await ApiService.getProjectAssignees(projectId);
+        const allOpts = [
+          ...(assigneeData.projectAssignees || []),
+          ...((assigneeData.otherGroups || []).flatMap(g => g.members || []))
+        ];
+        const uniq = new Map<string, { id: string; name: string; avatarUrl?: string; designation?: string }>();
+        allOpts.forEach((a: any) => {
+          const id = (a._id || a.id || a.userId)?.toString?.();
+          if (!id) return;
+          if (uniq.has(id)) return;
+          uniq.set(id, { id, name: a.name || 'User', avatarUrl: a.avatarUrl, designation: a.designation });
+        });
+        setAssigneeOptions(Array.from(uniq.values()));
+        const perm = assigneeData.permissions || {} as any;
+        setIsGroupMember(!!perm.isProjectGroupMember);
+        setIsTeamMember(!!perm.isTeamMember);
+        const isQAOrTester = (() => {
+          try {
+            const u = StorageService.getUser() as any;
+            const e = u?.email?.toLowerCase() || '';
+            if (SPECIAL_EMAILS.includes(e)) return true;
+            if (projectData.userId?.toString?.() === currentUserId.toString()) return true;
+          } catch {}
+          return false;
+        })();
+        const canAssignOrQA = !!perm.canAssign || isQAOrTester;
+        setIsPMorOwner(canAssignOrQA);
+        setCanAssignFilterAssignees(canAssignOrQA);
+      } catch (e: any) {
+        console.warn('[loadProject] assignee load failed', e);
+      }
     } catch (error: any) {
       if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
         StorageService.clearUser();
@@ -289,35 +573,63 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
     const x = ((e.clientX - rect.left) / rect.width) * 100;
     const y = ((e.clientY - rect.top) / rect.height) * 100;
 
-    setTempPin({ x, y, title: '', description: '' });
+    setTempPin({
+      x,
+      y,
+      title: '',
+      description: '',
+      type: project?.mode === 'working' ? 'issue' : 'comment'
+    });
     setIsEditingPin(true);
   };
 
   const handleSavePin = async () => {
     if (!project || !tempPin || !activePageId || !tempPin.title) return;
 
+    const targetType = tempPin.type || (project.mode === 'working' ? 'issue' : 'comment');
+
     try {
+      let savedPin: Pin;
       if (selectedPinId) {
-        await ApiService.updatePin(selectedPinId, { 
+        savedPin = await ApiService.updatePin(selectedPinId, { 
           title: tempPin.title, 
-          description: tempPin.description 
+          description: tempPin.description,
+          type: targetType
         });
       } else {
-        await ApiService.createPin(project.id, {
+        savedPin = await ApiService.createPin(project.id, {
           pageId: activePageId,
           x: tempPin.x!,
           y: tempPin.y!,
           title: tempPin.title!,
           description: tempPin.description || '',
-          device: viewMode
+          device: viewMode,
+          type: targetType
         });
+      }
+
+      if (targetType === 'issue' && project.mode === 'working') {
+        try {
+          await ApiService.savePinIssue(savedPin.id, { projectId: project.id, status: 'active' });
+        } catch {}
+      } else if (targetType === 'comment') {
+        try {
+          await ApiService.deletePinIssue(savedPin.id);
+        } catch {}
       }
 
       const updatedPins = await ApiService.getPins(project.id);
       setPins(updatedPins);
+      await refreshProjectIssues(project.id);
       setTempPin(null);
       setSelectedPinId(null);
       setIsEditingPin(false);
+
+      if (targetType === 'issue' && project.mode === 'working') {
+        const finalSavedPin = updatedPins.find(p => p.id === savedPin.id) || savedPin;
+        setIssueModalPin(finalSavedPin);
+        setShowIssueModal(true);
+      }
     } catch (error: any) {
       if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
         StorageService.clearUser();
@@ -335,6 +647,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       await ApiService.deletePin(selectedPinId);
       const updatedPins = await ApiService.getPins(project.id);
       setPins(updatedPins);
+      await refreshProjectIssues(project.id);
       setSelectedPinId(null);
       setTempPin(null);
       setIsEditingPin(false);
@@ -348,16 +661,34 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
     }
   };
 
-  const handleEditPin = (pin: Pin, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const openPinEditor = (pin: Pin) => {
     setSelectedPinId(pin.id);
     setTempPin({
       x: pin.x,
       y: pin.y,
       title: pin.title,
-      description: pin.description
+      description: pin.description,
+      type: pin.type || (project?.mode === 'working' ? 'issue' : 'comment')
     });
     setIsEditingPin(true);
+  };
+
+  const handleEditPin = (pin: Pin, e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    if (project?.mode === 'working') {
+      const pinType = pin.type || 'issue';
+      if (pinType === 'issue') {
+        setSelectedPinId(null);
+        setTempPin(null);
+        setIsEditingPin(false);
+        setIssueModalPin(pin);
+        setShowIssueModal(true);
+        return;
+      }
+    }
+
+    openPinEditor(pin);
   };
 
   const handleRefineWithAI = async () => {
@@ -717,7 +1048,24 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
             </div>
           </div>
         </div>
-        <div className="flex gap-2 md:gap-3 mt-2 md:mt-0 w-full md:w-auto justify-end">
+        <div className="flex gap-2 md:gap-3 mt-2 md:mt-0 w-full md:w-auto justify-end items-center">
+          {project?.mode === 'working' && (
+            <button
+              onClick={() => {
+                setShowSearchDrawer(prev => !prev);
+                refreshProjectIssues();
+                if (project) {
+                  ApiService.getPins(project.id).then(setPins).catch(() => {});
+                }
+              }}
+              className={`p-2 rounded-lg border transition flex items-center gap-1.5 text-xs font-medium ${showSearchDrawer ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border-slate-200'}`}
+              title="Search & Filter Project Issues"
+            >
+              <SlidersHorizontal size={16} />
+              <span className="hidden sm:inline">Filter Issues</span>
+            </button>
+          )}
+
           <div className="flex bg-slate-100 p-1 rounded-lg mr-2 md:static absolute top-3 right-4
                 md:flex">
             <button
@@ -766,6 +1114,267 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         </div>
       </header>
 
+      {/* Search & Filter Issues Drawer */}
+      {showSearchDrawer && (
+        <div
+          ref={searchDrawerRef}
+          className="fixed top-16 right-4 z-40 w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[80vh] animate-in fade-in zoom-in-95 duration-200"
+        >
+          <div className="p-4 border-b bg-gradient-to-r from-indigo-50 to-purple-50 flex items-center justify-between">
+            <div className="flex items-center gap-2 font-bold text-slate-800 text-sm">
+              <SlidersHorizontal className="w-4 h-4 text-indigo-600" />
+              <span>Issues & Comments ({filteredAndSortedItems.length})</span>
+            </div>
+            <button
+              onClick={() => setShowSearchDrawer(false)}
+              className="p-1 rounded-lg hover:bg-white/60 text-slate-500 transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Controls */}
+          <div className="p-3 border-b space-y-2.5 bg-slate-50">
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                value={issueSearchQuery}
+                onChange={e => setIssueSearchQuery(e.target.value)}
+                placeholder="Search by title, #pin, label, assignee..."
+                className="w-full pl-9 pr-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+              />
+            </div>
+
+            {/* Device & Type toggles (boolean-style) */}
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div>
+                <label className="block text-[10px] uppercase font-semibold text-slate-400 mb-0.5">Device</label>
+                <div className="grid grid-cols-3 gap-1 bg-slate-100 p-0.5 rounded-md">
+                  {(['all', 'desktop', 'mobile'] as const).map(v => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => setIssueDeviceFilter(v)}
+                      className={`py-1 rounded text-[10px] font-medium transition ${
+                        issueDeviceFilter === v
+                          ? 'bg-white shadow text-indigo-600'
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      {v === 'all' ? 'All' : v === 'desktop' ? <Monitor size={12} className="inline" /> : <Smartphone size={12} className="inline" />}
+                      {v !== 'all' ? ` ${v.charAt(0).toUpperCase()}${v.slice(1)}` : ''}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] uppercase font-semibold text-slate-400 mb-0.5">Pin Type</label>
+                <div className="grid grid-cols-3 gap-1 bg-slate-100 p-0.5 rounded-md">
+                  {(['all', 'issue', 'comment'] as const).map(v => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => setIssueTypeFilter(v)}
+                      className={`py-1 rounded text-[10px] font-medium transition ${
+                        issueTypeFilter === v
+                          ? 'bg-white shadow text-indigo-600'
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      {v === 'all' ? 'All' : v === 'issue' ? <AlertCircle size={12} className="inline" /> : <MessageSquare size={12} className="inline" />}
+                      {v !== 'all' ? ` ${v.charAt(0).toUpperCase()}${v.slice(1)}` : ''}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 text-xs">
+              <div>
+                <label className="block text-[10px] uppercase font-semibold text-slate-400 mb-0.5">Status</label>
+                <select
+                  value={issueStatusFilter}
+                  onChange={e => setIssueStatusFilter(e.target.value)}
+                  className="w-full px-2 py-1 rounded-md border border-slate-200 bg-white text-xs outline-none focus:border-indigo-500"
+                >
+                  <option value="all">All Statuses</option>
+                  <option value="active">Active</option>
+                  <option value="in_progress">In Progress</option>
+                  <option value="in_review">In Review</option>
+                  <option value="resolved">Resolved</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[10px] uppercase font-semibold text-slate-400 mb-0.5">Label</label>
+                <select
+                  value={issueLabelFilter}
+                  onChange={e => setIssueLabelFilter(e.target.value)}
+                  className="w-full px-2 py-1 rounded-md border border-slate-200 bg-white text-xs outline-none focus:border-indigo-500"
+                >
+                  <option value="all">All Labels</option>
+                  {availableLabels.map(l => (
+                    <option key={l} value={l}>{l}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[10px] uppercase font-semibold text-slate-400 mb-0.5">Sort By</label>
+                <select
+                  value={issueSortBy}
+                  onChange={e => setIssueSortBy(e.target.value as any)}
+                  className="w-full px-2 py-1 rounded-md border border-slate-200 bg-white text-xs outline-none focus:border-indigo-500"
+                >
+                  <option value="latest">Latest Created</option>
+                  <option value="earliest">Earliest Created</option>
+                  <option value="number">Pin Number</option>
+                </select>
+              </div>
+            </div>
+
+            {(isProjectOwnerOrAdminOrPMOrQA || canAssignFilterAssignees) ? (
+              <div>
+                <label className="block text-[10px] uppercase font-semibold text-slate-400 mb-0.5">Assignee</label>
+                <select
+                  value={issueAssigneeFilter}
+                  onChange={e => setIssueAssigneeFilter(e.target.value)}
+                  className="w-full px-2 py-1 rounded-md border border-slate-200 bg-white text-xs outline-none focus:border-indigo-500"
+                >
+                  <option value="all">All Assignees</option>
+                  <option value="unassigned">Unassigned</option>
+                  {uniqueAssigneesFromIssues.map(a => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}{a.designation ? ` · ${a.designation}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <div className="text-[10px] text-slate-400 italic px-1">
+                Showing only issues assigned to you
+              </div>
+            )}
+          </div>
+
+          {/* Issue List */}
+          <div className="p-3 overflow-y-auto flex-1 space-y-2 max-h-[50vh]">
+            {filteredAndSortedItems.length === 0 ? (
+              <div className="text-center text-slate-400 text-xs py-8">
+                No matching issues or comments found
+              </div>
+            ) : (
+              filteredAndSortedItems.map(item => {
+                const pin = item.pin;
+                const page = project?.pages.find(p => p.id === pin?.pageId);
+                const pinType = pin?.type || 'issue';
+                const pinDevice = pin?.device || 'desktop';
+                const isIssue = item.kind === 'issue';
+                const iss = isIssue ? item.issue : null;
+
+                const assigneeName = isIssue && iss
+                  ? (typeof iss.assigneeId === 'object' ? (iss.assigneeId as any).name : (iss.assigneeId ? 'Assigned' : 'Unassigned'))
+                  : 'Comment';
+
+                const statusBadge = isIssue && iss ? (
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium flex-shrink-0 ${
+                    iss.status === 'active' ? 'bg-blue-50 text-blue-700' :
+                    iss.status === 'in_progress' ? 'bg-orange-50 text-orange-700' :
+                    iss.status === 'in_review' ? 'bg-purple-50 text-purple-700' :
+                    'bg-emerald-50 text-emerald-700'
+                  }`}>
+                    {iss.status.replace('_', ' ')}
+                  </span>
+                ) : (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full font-medium flex-shrink-0 bg-slate-100 text-slate-600">
+                    Comment
+                  </span>
+                );
+
+                const handleItemClick = () => {
+                  setShowSearchDrawer(false);
+                  const targetPin = pin;
+                  if (!targetPin) return;
+
+                  if (targetPin.pageId && targetPin.pageId !== activePageId) {
+                    setActivePageId(targetPin.pageId);
+                  }
+
+                  const device = (targetPin.device || 'desktop') as 'desktop' | 'mobile';
+                  if (device !== viewMode) {
+                    handleViewModeChange(device);
+                  }
+
+                  setSelectedPinId(targetPin.id);
+
+                  const tryScroll = (retries = 0) => {
+                    if (!mainScrollRef.current && !imageRef.current) {
+                      if (retries < 15) setTimeout(() => tryScroll(retries + 1), 100);
+                      return;
+                    }
+                    const pinEl = document.querySelector(`[data-pin-id="${targetPin.id}"]`) as HTMLElement | null;
+                    const imageEl = imageRef.current;
+                    if (pinEl) {
+                      pinEl.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+                    } else if (imageEl) {
+                      imageEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    } else if (mainScrollRef.current) {
+                      mainScrollRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }
+                    if (!pinEl && retries < 10) setTimeout(() => tryScroll(retries + 1), 150);
+                  };
+                  setTimeout(() => tryScroll(), 200);
+
+                  const t = targetPin.type || 'issue';
+                  if (t === 'issue') {
+                    setIssueModalPin(targetPin);
+                    setShowIssueModal(true);
+                  } else {
+                    openPinEditor(targetPin);
+                  }
+                };
+
+                return (
+                  <div
+                    key={item.id}
+                    onClick={handleItemClick}
+                    className="p-3 rounded-xl border border-slate-200 bg-white hover:border-indigo-400 hover:shadow-md transition-all cursor-pointer space-y-1.5"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 font-bold text-slate-800 text-xs min-w-0">
+                        <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 font-mono flex-shrink-0">
+                          #{pin?.number || '?'}
+                        </span>
+                        <span className="truncate">{pin?.title || 'Annotation'}</span>
+                      </div>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        <span title={pinDevice === 'mobile' ? 'Mobile' : 'Desktop'} className={`text-[9px] p-0.5 rounded flex items-center gap-0.5 font-medium border ${pinDevice === 'mobile' ? 'text-purple-600 border-purple-200 bg-purple-50' : 'text-slate-600 border-slate-200 bg-slate-50'}`}>
+                          {pinDevice === 'mobile' ? <Smartphone size={10} /> : <Monitor size={10} />}
+                        </span>
+                        <span title={pinType === 'issue' ? 'Issue' : 'Comment'} className={`text-[9px] p-0.5 rounded flex items-center gap-0.5 font-medium border ${pinType === 'issue' ? 'bg-red-50 text-red-600 border-red-200' : 'bg-blue-50 text-blue-600 border-blue-200'}`}>
+                          {pinType === 'issue' ? <AlertCircle size={10} /> : <MessageSquare size={10} />}
+                        </span>
+                        {statusBadge}
+                      </div>
+                    </div>
+
+                    {pin?.description && (
+                      <p className="text-xs text-slate-500 line-clamp-1">{pin.description}</p>
+                    )}
+
+                    <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1 border-t border-slate-100">
+                      <span>Page: {page?.name || 'Main'}</span>
+                      <span className="truncate ml-2">{isIssue ? `Assignee: ${assigneeName}` : 'No assignee'}</span>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Pending Verification Modal */}
       {showPendingModal && (
         <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 backdrop-blur-sm p-4">
@@ -787,6 +1396,41 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
             </div>
           </div>
         </div>
+      )}
+
+      {showIssueModal && issueModalPin && project && (
+        <AnnotationIssueModal
+          isOpen={showIssueModal}
+          onClose={() => {
+            setShowIssueModal(false);
+            setIssueModalPin(null);
+            refreshProjectIssues(project.id);
+            if (project) {
+              ApiService.getPins(project.id).then(setPins).catch(() => {});
+            }
+          }}
+          pin={issueModalPin}
+          project={project}
+          isGroupMember={isGroupMember}
+          isPMorOwner={isPMorOwner}
+          isTeamMember={isTeamMember}
+          onPinUpdated={(updatedPin) => {
+            if (updatedPin) {
+              setPins(prev => prev.map(pin => pin.id === updatedPin.id ? updatedPin : pin));
+            }
+            refreshProjectIssues(project.id);
+            if (project) {
+              ApiService.getPins(project.id).then(setPins).catch(() => {});
+            }
+          }}
+          onDeletePin={(pinId) => {
+            setPins(prev => prev.filter(pin => pin.id !== pinId));
+            refreshProjectIssues(project.id);
+            if (project) {
+              ApiService.getPins(project.id).then(setPins).catch(() => {});
+            }
+          }}
+        />
       )}
 
       {/* Subscription Modal */}
@@ -943,7 +1587,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
           </div>
         </div>
 
-        <main className="flex-1 overflow-auto p-4 md:p-8 relative flex justify-center bg-slate-100/50">
+        <main ref={mainScrollRef} className="flex-1 overflow-auto p-4 md:p-8 relative flex justify-center bg-slate-100/50">
           {activePage ? (
             <div className={`transition-all duration-300 ${viewMode === 'mobile' ? 'w-[375px] h-[667px] overflow-y-auto border-4 border-slate-800 rounded-[2rem] shadow-2xl bg-slate-800 scrollbar-hide' : 'w-full max-w-[1000px]'}`}>
             <div 
@@ -968,21 +1612,29 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
                     draggable={false}
                   />
       
-                  {activePins.map((pin) => (
+                  {activePins.filter(canSeePin).map((pin) => (
                     <div
                       key={pin.id}
+                      data-pin-id={pin.id}
                       className="absolute transform -translate-x-1/2 -translate-y-1/2 group z-10"
                       style={{ left: `${pin.x}%`, top: `${pin.y}%` }}
                       onClick={(e) => handleEditPin(pin, e)}
                     >
                       <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-white shadow-lg cursor-pointer transition-transform hover:scale-110 border-2 border-white ${
-                        selectedPinId === pin.id ? 'bg-blue-600 scale-110 ring-4 ring-blue-600/20' : 'bg-slate-900'
+                        selectedPinId === pin.id ? 'bg-blue-600 scale-110 ring-4 ring-blue-600/20' : (pin.type && pin.type !== 'issue' ? 'bg-slate-600' : 'bg-slate-900')
                       }`}>
                         {pin.number}
                       </div>
                       {selectedPinId !== pin.id && (
                         <div className="absolute left-10 top-0 bg-slate-900 text-white text-xs px-3 py-2 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity w-48 pointer-events-none z-20">
-                          <span className="font-bold block mb-0.5">{pin.title}</span>
+                          <div className="flex items-center gap-1 mb-0.5">
+                            {(pin.type || 'issue') === 'issue' ? (
+                              <AlertCircle className="w-3 h-3 text-red-400" />
+                            ) : (
+                              <MessageSquare className="w-3 h-3 text-blue-300" />
+                            )}
+                            <span className="font-bold">{pin.title}</span>
+                          </div>
                           <span className="text-slate-300 line-clamp-2">{pin.description}</span>
                         </div>
                       )}
@@ -1036,6 +1688,35 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
               </div>
   
               <div className="space-y-4">
+                {project?.mode === 'working' && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Pin Mode</label>
+                    <div className="grid grid-cols-2 gap-2 bg-slate-100 p-1 rounded-lg">
+                      <button
+                        type="button"
+                        onClick={() => setTempPin({ ...tempPin, type: 'issue' })}
+                        className={`py-1.5 px-3 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 ${
+                          (tempPin.type || 'issue') === 'issue'
+                            ? 'bg-indigo-600 text-white shadow-sm'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        <AlertCircle size={14} /> Issue
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTempPin({ ...tempPin, type: 'comment' })}
+                        className={`py-1.5 px-3 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 ${
+                          tempPin.type === 'comment'
+                            ? 'bg-slate-800 text-white shadow-sm'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        <MessageSquare size={14} /> Comment
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Title</label>
                   <input 

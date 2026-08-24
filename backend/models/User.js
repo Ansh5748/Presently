@@ -14,6 +14,41 @@ const userSchema = new mongoose.Schema({
     lowercase: true,
     trim: true
   },
+  phone: {
+    type: String,
+    default: '',
+    trim: true
+  },
+  timeZone: {
+    type: String,
+    default: '',
+    trim: true
+  },
+  workingTimeStart: {
+    type: String,
+    default: '',
+    trim: true
+  },
+  workingTimeEnd: {
+    type: String,
+    default: '',
+    trim: true
+  },
+  statusText: {
+    type: String,
+    default: '',
+    trim: true
+  },
+  about: {
+    type: String,
+    default: '',
+    trim: true
+  },
+  avatarUrl: {
+    type: String,
+    default: '',
+    trim: true
+  },
   password: {
     type: String,
     required: true
@@ -28,6 +63,10 @@ const userSchema = new mongoose.Schema({
   passwordResetToken: String,
   passwordResetExpires: Date,
   createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
     type: Date,
     default: Date.now
   }

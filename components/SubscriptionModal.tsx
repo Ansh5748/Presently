@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Check, Loader2, CreditCard, Sparkles, Copy } from 'lucide-react';
+import { X, Check, Loader2, CreditCard, Sparkles, Copy, Zap, Shield, Users, BarChart3, ArrowRight } from 'lucide-react';
 
 interface SubscriptionModalProps {
   onClose: () => void;
@@ -169,7 +169,7 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ onClose, o
           }
         },
         theme: {
-          color: '#1e293b'
+          color: '#2563eb'
         }
       };
 
@@ -221,55 +221,73 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ onClose, o
   const isManualPayment = !!manualPaymentData;
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-        {/* Header */}
-        <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-4 md:p-6 rounded-t-2xl z-10">
+    <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 backdrop-blur-sm p-4">
+      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[95vh] overflow-y-auto">
+        {/* Header - Enhanced */}
+        <div className="sticky top-0 bg-gradient-to-br from-blue-600 via-indigo-600 to-purple-600 text-white p-6 md:p-8 rounded-t-3xl z-10">
           <div className="flex justify-between items-start">
-            <div>
-              <h2 className="text-xl md:text-2xl font-bold flex items-center gap-2">
-                {isManualPayment ? <CreditCard size={24} /> : <Sparkles size={24} />}
-                {isManualPayment ? 'Complete Payment' : (title || 'Unlock Unlimited Projects')}
-              </h2>
-              <p className="text-blue-100 mt-1">{isManualPayment ? 'Please complete the transfer below' : (message || 'Choose a plan that works for you')}</p>
+            <div className="flex-1">
+              <div className="flex items-center gap-3 mb-2">
+                <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-sm">
+                  {isManualPayment ? <CreditCard size={22} /> : <Sparkles size={22} />}
+                </div>
+                <h2 className="text-2xl md:text-3xl font-bold">
+                  {isManualPayment ? 'Complete Payment' : (title || 'Unlock Unlimited Projects')}
+                </h2>
+              </div>
+              <p className="text-blue-100 text-lg">
+                {isManualPayment ? 'Please complete the transfer below' : (message || 'Choose a plan that works for you')}
+              </p>
             </div>
-            <button onClick={onClose} className="text-white hover:bg-white/20 p-2 rounded-lg transition">
-              <X size={20} />
+            <button 
+              onClick={onClose} 
+              className="text-white hover:bg-white/20 p-2.5 rounded-xl transition-all duration-200 hover:scale-110"
+            >
+              <X size={24} />
             </button>
           </div>
         </div>
 
-        {/* Content */}
-        <div className="p-4 md:p-6 space-y-6">
+        {/* Content - Enhanced */}
+        <div className="p-6 md:p-8 space-y-8">
           {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
-              {error}
+            <div className="bg-red-50 border border-red-200 text-red-700 px-5 py-4 rounded-xl text-sm flex items-start gap-3">
+              <div className="w-5 h-5 mt-0.5 text-red-500 flex-shrink-0">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              </div>
+              <div className="flex-1">
+                <p className="font-semibold mb-1">Error</p>
+                <p className="text-red-600">{error}</p>
+              </div>
             </div>
           )}
 
           {isManualPayment ? (
             <div className="space-y-6">
-              <div className="bg-slate-50 p-6 rounded-xl border border-slate-200">
-                <h3 className="font-semibold text-slate-900 mb-4">Payment Details</h3>
+              <div className="bg-gradient-to-br from-slate-50 to-blue-50 p-8 rounded-2xl border border-slate-200">
+                <h3 className="text-xl font-bold text-slate-900 mb-6 flex items-center gap-2">
+                  <CreditCard size={24} className="text-blue-600" />
+                  Payment Details
+                </h3>
                 
-                <div className="space-y-4">
-                  <div className="flex justify-between items-center pb-4 border-b border-slate-200">
-                    <span className="text-slate-600">Amount to Pay</span>
-                    <span className="text-2xl font-bold text-slate-900">
+                <div className="space-y-6">
+                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center pb-6 border-b border-slate-200">
+                    <span className="text-slate-600 font-medium text-lg">Amount to Pay</span>
+                    <span className="text-4xl font-black text-slate-900 mt-2 md:mt-0">
                       {manualPaymentData.currency === 'USD' ? '$' : '₹'}{manualPaymentData.amount}
                     </span>
                   </div>
 
                   {manualPaymentData.upiId && (
-                    <div>
-                      <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">UPI ID</label>
-                      <div className="flex items-center gap-2 mt-1">
-                        <code className="bg-white px-3 py-2 rounded-lg border border-slate-300 flex-1 font-mono text-slate-800">
+                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                      <label className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3 block">UPI ID</label>
+                      <div className="flex items-center gap-3">
+                        <code className="bg-slate-50 px-4 py-3 rounded-lg border border-slate-300 flex-1 font-mono text-lg text-slate-800">
                           {manualPaymentData.upiId}
                         </code>
                         <button 
                           onClick={() => navigator.clipboard.writeText(manualPaymentData.upiId!)}
-                          className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                          className="p-3 bg-blue-600 text-white hover:bg-blue-700 rounded-lg transition-all duration-200 hover:scale-105 shadow-md"
                           title="Copy UPI ID"
                         >
                           <Copy size={20} />
@@ -279,9 +297,9 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ onClose, o
                   )}
 
                   {manualPaymentData.paypalUsername && (
-                    <div>
-                      <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">PayPal</label>
-                      <div className="mt-1 text-slate-900 font-medium">
+                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                      <label className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3 block">PayPal</label>
+                      <div className="text-slate-900 font-bold text-lg">
                         Send to: {manualPaymentData.paypalUsername}
                       </div>
                     </div>
@@ -289,144 +307,181 @@ export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ onClose, o
                 </div>
               </div>
 
-              <p className="text-sm text-slate-600 text-center">
-                After completing the payment, click the button below to activate your subscription.
-              </p>
+              <div className="bg-blue-50 border border-blue-200 p-6 rounded-2xl">
+                <p className="text-slate-700 text-center leading-relaxed">
+                  After completing the payment, click the button below to activate your subscription. 
+                  We'll verify your payment shortly!
+                </p>
+              </div>
             </div>
           ) : (
             <>
-          {/* Currency Toggle - Only show if not in manual payment mode */}
-          <div className="flex gap-2 bg-slate-100 p-1 rounded-lg w-fit mx-auto">
-            <button
-              onClick={() => setSelectedCurrency('USD')}
-              className={`px-6 py-2 rounded-md font-medium transition ${
-                selectedCurrency === 'USD' ? 'bg-white shadow text-slate-900' : 'text-slate-600'
-              }`}
-            >
-              USD ($)
-            </button>
-            <button
-              onClick={() => setSelectedCurrency('INR')}
-              className={`px-6 py-2 rounded-md font-medium transition ${
-                selectedCurrency === 'INR' ? 'bg-white shadow text-slate-900' : 'text-slate-600'
-              }`}
-            >
-              INR (₹)
-            </button>
-          </div>
+              {/* Features Preview */}
+              <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 rounded-2xl p-6 border border-slate-200">
+                <h3 className="text-lg font-bold text-slate-900 mb-4">What you get with Pro:</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {[
+                    { icon: <Zap size={20} className="text-yellow-500" />, text: 'Unlimited Projects' },
+                    { icon: <Shield size={20} className="text-green-500" />, text: 'Priority Support' },
+                    { icon: <Users size={20} className="text-blue-500" />, text: 'Team Collaboration' },
+                    { icon: <BarChart3 size={20} className="text-purple-500" />, text: 'Advanced Analytics' }
+                  ].map((feature, i) => (
+                    <div key={i} className="flex items-center gap-3 bg-white p-3 rounded-xl border border-slate-200">
+                      {feature.icon}
+                      <span className="text-slate-700 font-medium">{feature.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
 
-          {/* Plans */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {Object.entries(plans[selectedCurrency]).map(([key, plan]) => {
-              const isSelected = selectedPlan === key;
-              const isBestValue = key === '12_month';
-              
-              return (
+              {/* Currency Toggle - Styled */}
+              <div className="flex gap-2 bg-slate-100 p-1.5 rounded-xl w-fit mx-auto shadow-inner">
                 <button
-                  key={key}
-                  onClick={() => setSelectedPlan(key as any)}
-                  className={`relative p-6 rounded-xl border-2 transition ${
-                    isSelected
-                      ? 'border-blue-600 bg-blue-50 shadow-lg scale-105'
-                      : 'border-slate-200 hover:border-blue-300'
+                  onClick={() => setSelectedCurrency('USD')}
+                  className={`px-8 py-3 rounded-lg font-semibold text-base transition-all duration-300 ${
+                    selectedCurrency === 'USD' 
+                      ? 'bg-white text-slate-900 shadow-lg scale-105' 
+                      : 'text-slate-600 hover:text-slate-800'
                   }`}
                 >
-                  {isBestValue && (
-                    <div className="absolute -top-3 left-1/2 transform -translate-x-1/2">
-                      <span className="bg-green-500 text-white text-xs font-bold px-3 py-1 rounded-full whitespace-nowrap">
-                        BEST VALUE
-                      </span>
-                    </div>
-                  )}
-                  <div className="text-center">
-                    <h3 className="font-bold text-lg text-slate-900">{plan.name}</h3>
-                    <div className="mt-3">
-                      <span className="text-3xl font-bold text-slate-900">
-                        {selectedCurrency === 'USD' ? '$' : '₹'}{plan.price}
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-500 mt-2">Unlimited projects</p>
-                  </div>
-                  {isSelected && (
-                    <div className="absolute top-4 right-4">
-                      <div className="bg-blue-600 rounded-full p-1">
-                        <Check size={16} className="text-white" />
-                      </div>
-                    </div>
-                  )}
+                  USD ($)
                 </button>
-              );
-            })}
-          </div>
-
-          {/* Coupon Code */}
-          <div className="bg-slate-50 p-4 rounded-xl">
-            <label className="block text-sm font-medium text-slate-700 mb-2">
-              Have a coupon code?
-            </label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={couponCode}
-                onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
-                placeholder="Enter code"
-                className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              />
-              <button
-                onClick={handleApplyCoupon}
-                className="px-4 py-2 bg-slate-900 text-white rounded-lg text-sm font-medium hover:bg-slate-800"
-              >
-                Apply
-              </button>
-            </div>
-            {appliedCoupon && (
-              <div className="mt-2 text-sm text-green-600 font-medium">
-                ✓ Coupon "{appliedCoupon}" applied - {discount}% off!
+                <button
+                  onClick={() => setSelectedCurrency('INR')}
+                  className={`px-8 py-3 rounded-lg font-semibold text-base transition-all duration-300 ${
+                    selectedCurrency === 'INR' 
+                      ? 'bg-white text-slate-900 shadow-lg scale-105' 
+                      : 'text-slate-600 hover:text-slate-800'
+                  }`}
+                >
+                  INR (₹)
+                </button>
               </div>
-            )}
-          </div>
 
-          {/* Price Summary */}
-          <div className="border-t border-slate-200 pt-4">
-            <div className="flex justify-between text-slate-600 mb-2">
-              <span>Original Price</span>
-              <span>{selectedCurrency === 'USD' ? '$' : '₹'}{originalPrice}</span>
-            </div>
-            {discount > 0 && (
-              <div className="flex justify-between text-green-600 mb-2">
-                <span>Discount ({discount}%)</span>
-                <span>-{selectedCurrency === 'USD' ? '$' : '₹'}{originalPrice - finalPrice}</span>
+              {/* Plans - Enhanced Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {Object.entries(plans[selectedCurrency]).map(([key, plan]) => {
+                  const isSelected = selectedPlan === key;
+                  const isBestValue = key === '12_month';
+                  
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => setSelectedPlan(key as any)}
+                      className={`relative p-8 rounded-2xl border-3 transition-all duration-300 ${
+                        isSelected
+                          ? 'border-blue-600 bg-gradient-to-br from-blue-50 to-indigo-50 shadow-2xl scale-105'
+                          : 'border-slate-200 bg-white hover:border-blue-300 hover:shadow-xl'
+                      }`}
+                    >
+                      {isBestValue && (
+                        <div className="absolute -top-4 left-1/2 transform -translate-x-1/2 z-10">
+                          <span className="bg-gradient-to-r from-green-500 to-emerald-500 text-white text-xs font-black px-4 py-1.5 rounded-full shadow-lg whitespace-nowrap">
+                            🔥 BEST VALUE
+                          </span>
+                        </div>
+                      )}
+                      <div className="text-center">
+                        <h3 className="font-black text-xl text-slate-900">{(plan as { name: string }).name || 'Plan'}</h3>
+
+                        <div className="mt-4">
+                          <span className="text-5xl font-black text-slate-900">
+                            {selectedCurrency === 'USD' ? '$' : '₹'}{(plan as { price: number })?.price || 0}
+                          </span>
+                          <span className="text-slate-500 text-lg ml-1">/plan</span>
+                        </div>
+                        <p className="text-sm text-slate-600 mt-3 bg-white/60 px-3 py-1 rounded-full inline-block">
+                          Unlimited projects
+                        </p>
+                      </div>
+                      {isSelected && (
+                        <div className="absolute top-6 right-6">
+                          <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-full p-2 shadow-lg">
+                            <Check size={18} className="text-white" />
+                          </div>
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
-            )}
-            <div className="flex justify-between text-xl font-bold text-slate-900">
-              <span>Total</span>
-              <span>{selectedCurrency === 'USD' ? '$' : '₹'}{finalPrice}</span>
-            </div>
-          </div>
+
+              {/* Coupon Code - Enhanced */}
+              <div className="bg-gradient-to-r from-slate-50 to-slate-100 p-6 rounded-2xl border border-slate-200">
+                <label className="block text-sm font-bold text-slate-700 mb-4 flex items-center gap-2">
+                  ✨ Have a coupon code?
+                </label>
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <input
+                    type="text"
+                    value={couponCode}
+                    onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                    placeholder="Enter code"
+                    className="flex-1 border-2 border-slate-300 rounded-xl px-5 py-3.5 text-base focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:outline-none transition-all bg-white"
+                  />
+                  <button
+                    onClick={handleApplyCoupon}
+                    className="px-6 py-3.5 bg-gradient-to-r from-slate-900 to-slate-800 text-white rounded-xl font-semibold hover:from-slate-800 hover:to-slate-700 transition-all shadow-lg hover:shadow-xl"
+                  >
+                    Apply
+                  </button>
+                </div>
+                {appliedCoupon && (
+                  <div className="mt-4 text-base text-green-700 font-bold flex items-center gap-2 bg-green-50 p-3 rounded-lg border border-green-200">
+                    <Check size={20} />
+                    Coupon "{appliedCoupon}" applied - {discount}% off! 🎉
+                  </div>
+                )}
+              </div>
+
+              {/* Price Summary - Enhanced */}
+              <div className="bg-white border-2 border-slate-200 rounded-2xl p-6 shadow-sm">
+                <h4 className="font-bold text-slate-900 mb-4 text-lg">Price Summary</h4>
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center text-slate-600">
+                    <span className="text-base">Original Price</span>
+                    <span className="text-xl font-semibold">{selectedCurrency === 'USD' ? '$' : '₹'}{originalPrice}</span>
+                  </div>
+                  {discount > 0 && (
+                    <div className="flex justify-between items-center text-green-600 bg-green-50 p-3 rounded-lg">
+                      <span className="text-base font-semibold">Discount ({discount}%)</span>
+                      <span className="text-xl font-bold">-{selectedCurrency === 'USD' ? '$' : '₹'}{originalPrice - finalPrice}</span>
+                    </div>
+                  )}
+                  <div className="h-px bg-slate-200 my-2"></div>
+                  <div className="flex justify-between items-center text-3xl font-black text-slate-900">
+                    <span>Total</span>
+                    <span className="bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
+                      {selectedCurrency === 'USD' ? '$' : '₹'}{finalPrice}
+                    </span>
+                  </div>
+                </div>
+              </div>
             </>
           )}
 
-          {/* Subscribe Button */}
+          {/* Subscribe Button - Enhanced */}
           <button
             onClick={isManualPayment ? handleManualVerify : handleSubscribe}
             disabled={loading}
-            className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-6 py-4 rounded-xl font-bold text-lg shadow-lg transition disabled:opacity-50"
+            className="w-full flex items-center justify-center gap-3 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-700 hover:via-indigo-700 hover:to-purple-700 text-white px-8 py-5 rounded-2xl font-black text-xl shadow-2xl hover:shadow-3xl transition-all duration-300 hover:scale-[1.02] disabled:opacity-50 disabled:hover:scale-100"
           >
             {loading ? (
               <>
-                <Loader2 size={20} className="animate-spin" />
+                <Loader2 size={24} className="animate-spin" />
                 Processing...
               </>
             ) : (
               <>
-                {isManualPayment ? <Check size={20} /> : <CreditCard size={20} />}
+                {isManualPayment ? <Check size={24} /> : <CreditCard size={24} />}
                 {isManualPayment ? 'I Have Made the Payment' : 'Subscribe Now'}
+                {!isManualPayment && <ArrowRight size={24} />}
               </>
             )}
           </button>
 
-          {!isManualPayment && <p className="text-xs text-center text-slate-500">
-            Secure payment powered by Razorpay. Cancel anytime.
+          {!isManualPayment && <p className="text-center text-slate-500 text-sm pt-2">
+            🔒 Secure payment powered by Razorpay. Cancel anytime.
           </p>}
         </div>
       </div>

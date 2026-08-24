@@ -51,13 +51,31 @@ const projectSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  groupId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Group',
+    index: true
+  },
+  groupIds: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Group',
+    index: true
+  }],
+  mode: {
+    type: String,
+    enum: ['present', 'working'],
+    default: 'present'
+  },
+  assignedUserIds: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
   pages: [projectPageSchema],
   status: {
     type: String,
     enum: ['DRAFT', 'PUBLISHED'],
     default: 'DRAFT'
   },
-  // Store published snapshot separately
   publishedSnapshot: {
     pages: [projectPageSchema],
     pins: [pinSnapshotSchema],

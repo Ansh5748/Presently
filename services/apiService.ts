@@ -1,196 +1,811 @@
-// API service for backend communication with MongoDB
+﻿import type {
+  AnnotationIssue,
+  AnnotationIssueStatus,
+  AnnotationMessage,
+  AssigneeOption,
+  ChatMessage,
+  Group,
+  GroupMember,
+  GroupType,
+  MemberRole,
+  MessageVisibility,
+  Project,
+  Subgroup,
+  UserProfile,
+  UserSearchResult
+} from '../types';
 
-const API_BASE = import.meta.env.VITE_API_URL;
+const API_BASE = (import.meta.env.VITE_API_URL as string) || '';
+export const AUTH_EVENT = 'presently:auth:error';
 
-const getAuthHeaders = () => {
-  const userData = localStorage.getItem('presently_user');
-  if (!userData) return {};
-  
-  const { accessToken } = JSON.parse(userData);
+type StoredUser = {
+  accessToken?: string;
+  userId?: string;
+  id?: string;
+};
+
+const readStoredUser = (): StoredUser => {
+  try {
+    const raw = localStorage.getItem('presently_user');
+    return raw ? (JSON.parse(raw) as StoredUser) : {};
+  } catch {
+    return {};
+  }
+};
+
+const getAuthHeaders = (): Record<string, string> => {
+  const user = readStoredUser();
+  const token = user.accessToken;
+
+  if (!token) {
+    return {};
+  }
+
   return {
-    'Authorization': `Bearer ${accessToken}`,
+    Authorization: `Bearer ${token}`,
     'Content-Type': 'application/json'
   };
 };
 
+export const authFetch = async (url: string, options: RequestInit = {}) => {
+  const defaultHeaders = getAuthHeaders();
+  const resolvedHeaders =
+    options.headers instanceof Headers
+      ? Object.fromEntries(options.headers.entries())
+      : ((options.headers as Record<string, string> | undefined) ?? {});
+
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      ...defaultHeaders,
+      ...resolvedHeaders
+    }
+  });
+
+  if (response.status === 401 || response.status === 403) {
+    localStorage.removeItem('presently_user');
+    window.dispatchEvent(new CustomEvent(AUTH_EVENT, {
+      detail: { target: '/login' }
+    }));
+  }
+
+  return response;
+};
+
+const CacheService = {
+  userId: () => {
+    const user = readStoredUser();
+    return user.userId || user.id || 'anonymous';
+  },
+  set: (key: string, value: unknown) => {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      // ignore storage errors
+    }
+  },
+  invalidate: (key: string) => {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // ignore storage errors
+    }
+  },
+  invalidatePrefix: (prefix: string) => {
+    try {
+      Object.keys(localStorage).forEach((key) => {
+        if (key.startsWith(prefix)) {
+          localStorage.removeItem(key);
+        }
+      });
+    } catch {
+      // ignore storage errors
+    }
+  }
+};
+
+const CACHE_KEYS = {
+  PROJECTS: (userId: string) => `presently:projects:${userId}`,
+  PROJECT: (userId: string, projectId: string) => `presently:project:${userId}:${projectId}`,
+  PINS: (userId: string, projectId: string, view: string) => `presently:pins:${userId}:${projectId}:${view}`,
+  PROJECT_ASSIGNEES: (userId: string, projectId: string) => `presently:projectAssignees:${userId}:${projectId}`,
+  SUBSCRIPTION_STATUS: (userId: string) => `presently:subscription:${userId}`,
+  USER_SEARCH: (userId: string, email: string) => `presently:userSearch:${userId}:${email}`,
+  USERS_ALL: (userId: string) => `presently:users:${userId}`,
+  MY_PROFILE: (userId: string) => `presently:myProfile:${userId}`,
+  GROUPS: (userId: string) => `presently:groups:${userId}`,
+  GROUP: (userId: string, groupId: string) => `presently:group:${userId}:${groupId}`,
+  GROUP_MESSAGES: (userId: string, groupId: string, subgroupId: string) => `presently:groupMessages:${userId}:${groupId}:${subgroupId}`,
+  DIRECT_MESSAGES: (userId: string, recipientId: string) => `presently:directMessages:${userId}:${recipientId}`,
+  PROJECT_ISSUES: (userId: string, projectId: string) => `presently:projectIssues:${userId}:${projectId}`,
+  PIN_ISSUE: (userId: string, pinId: string) => `presently:pinIssue:${userId}:${pinId}`,
+  ISSUE_MESSAGES: (userId: string, issueId: string) => `presently:issueMessages:${userId}:${issueId}`
+};
+
+const projectListPrefix = () => {
+  const userId = CacheService.userId();
+  return CACHE_KEYS.PROJECTS(userId).slice(0, CACHE_KEYS.PROJECTS(userId).lastIndexOf(':') + 1);
+};
+
+const pinListPrefix = (projectId: string, view = '') => {
+  const userId = CacheService.userId();
+  return CACHE_KEYS.PINS(userId, projectId, view).slice(0, CACHE_KEYS.PINS(userId, projectId, view).lastIndexOf(':') + 1);
+};
+
 export const ApiService = {
-  // ==================== PROJECTS ====================
-  
-  async getProjects() {
-    const response = await fetch(`${API_BASE}/projects`, {
-      headers: getAuthHeaders()
-    });
-    
+  async getProjects(): Promise<Project[]> {
+    const response = await authFetch(`${API_BASE}/projects`);
+
     if (!response.ok) {
       throw new Error('Failed to fetch projects');
     }
-    
-    return await response.json();
+
+    const data = (await response.json()) as Project[];
+    CacheService.set(CACHE_KEYS.PROJECTS(CacheService.userId()), data);
+    return data;
   },
 
-  async getProject(projectId: string, view?: 'draft' | 'live') {
+  async getProject(projectId: string, view?: 'draft' | 'live'): Promise<Project> {
     const url = view ? `${API_BASE}/projects/${projectId}?view=${view}` : `${API_BASE}/projects/${projectId}`;
-    const response = await fetch(url);
-    
+    const response = await authFetch(url);
+
     if (!response.ok) {
       throw new Error('Project not found');
     }
-    
-    return await response.json();
+
+    const data = (await response.json()) as Project;
+    if (!view || view !== 'live') {
+      CacheService.set(CACHE_KEYS.PROJECT(CacheService.userId(), projectId), data);
+    }
+    return data;
   },
 
-  async createProject(data: any) {
-    const response = await fetch(`${API_BASE}/projects`, {
+  async createProject(data: Record<string, unknown>): Promise<Project> {
+    const response = await authFetch(`${API_BASE}/projects`, {
       method: 'POST',
-      headers: getAuthHeaders(),
       body: JSON.stringify(data)
     });
-    
+
     if (!response.ok) {
-      const error = await response.json();
+      const error = (await response.json().catch(() => ({}))) as { requiresSubscription?: boolean; error?: string };
       if (error.requiresSubscription) {
         throw new Error('SUBSCRIPTION_REQUIRED');
       }
       throw new Error(error.error || 'Failed to create project');
     }
-    
-    return await response.json();
+
+    const result = (await response.json()) as Project;
+    CacheService.invalidatePrefix(projectListPrefix());
+    return result;
+  },
+
+  async updateProject(projectId: string, updates: Record<string, unknown>): Promise<Project> {
+    const response = await authFetch(`${API_BASE}/projects/${projectId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates)
+    });
+
+    if (!response.ok) {
+      const error = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(error.error || 'Failed to update project');
+    }
+
+    const data = (await response.json()) as Project;
+    CacheService.invalidate(CACHE_KEYS.PROJECT(CacheService.userId(), projectId));
+    CacheService.invalidatePrefix(projectListPrefix());
+    return data;
   },
 
   async deleteProject(projectId: string) {
-    const response = await fetch(`${API_BASE}/projects/${projectId}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders()
+    const response = await authFetch(`${API_BASE}/projects/${projectId}`, {
+      method: 'DELETE'
     });
-    
+
     if (!response.ok) {
       throw new Error('Failed to delete project');
     }
-    
-    return await response.json();
+
+    const data = await response.json();
+    CacheService.invalidate(CACHE_KEYS.PROJECT(CacheService.userId(), projectId));
+    CacheService.invalidatePrefix(projectListPrefix());
+    return data;
   },
 
   async publishProject(projectId: string) {
-    const response = await fetch(`${API_BASE}/projects/${projectId}/publish`, {
-      method: 'POST',
-      headers: getAuthHeaders()
+    const response = await authFetch(`${API_BASE}/projects/${projectId}/publish`, {
+      method: 'POST'
     });
-    
+
     if (!response.ok) {
       throw new Error('Failed to publish project');
     }
-    
-    return await response.json();
+
+    const data = await response.json();
+    CacheService.invalidate(CACHE_KEYS.PROJECT(CacheService.userId(), projectId));
+    CacheService.invalidatePrefix(projectListPrefix());
+    return data;
   },
 
-  // ==================== PAGES ====================
+  async assignUsersToProject(projectId: string, userIds: string[]) {
+    const response = await authFetch(`${API_BASE}/projects/${projectId}/assign-users`, {
+      method: 'POST',
+      body: JSON.stringify({ userIds })
+    });
+
+    if (!response.ok) {
+      const error = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(error.error || 'Failed to assign users');
+    }
+
+    const data = await response.json();
+    CacheService.invalidate(CACHE_KEYS.PROJECT(CacheService.userId(), projectId));
+    return data;
+  },
+
+  async getProjectAssignees(projectId: string): Promise<{
+    projectAssignees: AssigneeOption[];
+    otherGroups: { id: string; name: string; type: GroupType; members: AssigneeOption[] }[];
+    permissions: { isProjectGroupMember: boolean; canAssign: boolean; canCrossGroupSearch: boolean; isTeamMember: boolean };
+  }> {
+    const response = await authFetch(`${API_BASE}/projects/${projectId}/assignees`);
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch assignees');
+    }
+
+    const data = (await response.json()) as {
+      projectAssignees: AssigneeOption[];
+      otherGroups: { id: string; name: string; type: GroupType; members: AssigneeOption[] }[];
+      permissions: { isProjectGroupMember: boolean; canAssign: boolean; canCrossGroupSearch: boolean; isTeamMember: boolean };
+    };
+
+    CacheService.set(CACHE_KEYS.PROJECT_ASSIGNEES(CacheService.userId(), projectId), data);
+    return data;
+  },
 
   async addPage(projectId: string, data: { name: string; imageUrl: string; originalUrl?: string }) {
-    const response = await fetch(`${API_BASE}/projects/${projectId}/pages`, {
+    const response = await authFetch(`${API_BASE}/projects/${projectId}/pages`, {
       method: 'POST',
-      headers: getAuthHeaders(),
       body: JSON.stringify(data)
     });
-    
+
     if (!response.ok) {
       throw new Error('Failed to add page');
     }
-    
-    return await response.json();
+
+    const result = await response.json();
+    CacheService.invalidate(CACHE_KEYS.PROJECT(CacheService.userId(), projectId));
+    return result;
   },
 
-  async updatePage(projectId: string, pageId: string, updates: any) {
-    const response = await fetch(`${API_BASE}/projects/${projectId}/pages/${pageId}`, {
+  async updatePage(projectId: string, pageId: string, updates: Record<string, unknown>) {
+    const response = await authFetch(`${API_BASE}/projects/${projectId}/pages/${pageId}`, {
       method: 'PATCH',
-      headers: getAuthHeaders(),
       body: JSON.stringify(updates)
     });
-    
+
     if (!response.ok) {
       throw new Error('Failed to update page');
     }
-    
-    return await response.json();
+
+    const result = await response.json();
+    CacheService.invalidate(CACHE_KEYS.PROJECT(CacheService.userId(), projectId));
+    return result;
   },
 
   async deletePage(projectId: string, pageId: string) {
-    const response = await fetch(`${API_BASE}/projects/${projectId}/pages/${pageId}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders()
+    const response = await authFetch(`${API_BASE}/projects/${projectId}/pages/${pageId}`, {
+      method: 'DELETE'
     });
-    
+
     if (!response.ok) {
       throw new Error('Failed to delete page');
     }
-    
-    return await response.json();
+
+    const result = await response.json();
+    CacheService.invalidate(CACHE_KEYS.PROJECT(CacheService.userId(), projectId));
+    return result;
   },
 
-  // ==================== PINS ====================
+  async getPins(projectId: string, view?: 'draft' | 'live') {
+    const url = view ? `${API_BASE}/projects/${projectId}/pins?view=${view}` : `${API_BASE}/projects/${projectId}/pins`;
+    const response = await authFetch(url);
 
-    async getPins(projectId: string, view?: 'draft' | 'live') {
-      const url = view ? `${API_BASE}/projects/${projectId}/pins?view=${view}` : `${API_BASE}/projects/${projectId}/pins`;
-      const response = await fetch(url);
-    
     if (!response.ok) {
       throw new Error('Failed to fetch pins');
     }
-    
-    return await response.json();
+
+    const data = await response.json();
+    if (!view || view !== 'live') {
+      CacheService.set(CACHE_KEYS.PINS(CacheService.userId(), projectId, view || 'default'), data);
+    }
+    return data;
   },
 
-  async createPin(projectId: string, data: any) {
-    const response = await fetch(`${API_BASE}/projects/${projectId}/pins`, {
+  async createPin(projectId: string, data: Record<string, unknown>) {
+    const response = await authFetch(`${API_BASE}/projects/${projectId}/pins`, {
       method: 'POST',
-      headers: getAuthHeaders(),
       body: JSON.stringify(data)
     });
-    
+
     if (!response.ok) {
       throw new Error('Failed to create pin');
     }
-    
-    return await response.json();
+
+    const result = await response.json();
+    CacheService.invalidatePrefix(pinListPrefix(projectId));
+    return result;
   },
 
-  async updatePin(pinId: string, updates: any) {
-    const response = await fetch(`${API_BASE}/pins/${pinId}`, {
+  async updatePin(pinId: string, updates: Record<string, unknown>) {
+    const response = await authFetch(`${API_BASE}/pins/${pinId}`, {
       method: 'PATCH',
-      headers: getAuthHeaders(),
       body: JSON.stringify(updates)
     });
-    
+
     if (!response.ok) {
       throw new Error('Failed to update pin');
     }
-    
-    return await response.json();
+
+    const result = await response.json();
+    const projectId = result?.projectId as string | undefined;
+    if (projectId) {
+      CacheService.invalidatePrefix(pinListPrefix(projectId));
+    }
+    return result;
   },
 
   async deletePin(pinId: string) {
-    const response = await fetch(`${API_BASE}/pins/${pinId}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders()
+    const response = await authFetch(`${API_BASE}/pins/${pinId}`, {
+      method: 'DELETE'
     });
-    
+
     if (!response.ok) {
       throw new Error('Failed to delete pin');
     }
-    
-    return await response.json();
+
+    const result = await response.json();
+    const projectId = result?.projectId as string | undefined;
+    if (projectId) {
+      CacheService.invalidatePrefix(pinListPrefix(projectId));
+    }
+    return result;
   },
 
-  // ==================== SUBSCRIPTION ====================
-
   async getSubscriptionStatus() {
-    const response = await fetch(`${API_BASE}/subscription/status`, {
-      headers: getAuthHeaders()
-    });
-    
+    const response = await authFetch(`${API_BASE}/subscription/status`);
+
     if (!response.ok) {
       throw new Error('Failed to check subscription');
     }
-    
-    return await response.json();
+
+    const data = await response.json();
+    CacheService.set(CACHE_KEYS.SUBSCRIPTION_STATUS(CacheService.userId()), data);
+    return data;
+  },
+
+  async searchUsers(email: string): Promise<UserSearchResult[]> {
+    const response = await authFetch(`${API_BASE}/users/search?email=${encodeURIComponent(email)}`);
+
+    if (!response.ok) {
+      throw new Error('Failed to search users');
+    }
+
+    const data = (await response.json()) as UserSearchResult[];
+    CacheService.set(CACHE_KEYS.USER_SEARCH(CacheService.userId(), email), data);
+    return data;
+  },
+
+  async getAllUsers(): Promise<UserSearchResult[]> {
+    const response = await authFetch(`${API_BASE}/users/all`);
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch users');
+    }
+
+    const data = (await response.json()) as UserSearchResult[];
+    CacheService.set(CACHE_KEYS.USERS_ALL(CacheService.userId()), data);
+    return data;
+  },
+
+  async getMyProfile(): Promise<UserProfile> {
+    const response = await authFetch(`${API_BASE}/users/me`);
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch profile');
+    }
+
+    const data = (await response.json()) as UserProfile;
+    CacheService.set(CACHE_KEYS.MY_PROFILE(CacheService.userId()), data);
+    return data;
+  },
+
+  async updateMyProfile(updates: Partial<UserProfile>): Promise<UserProfile> {
+    const response = await authFetch(`${API_BASE}/users/me`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates)
+    });
+
+    if (!response.ok) {
+      const error = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(error.error || 'Failed to update profile');
+    }
+
+    const data = (await response.json()) as UserProfile;
+    CacheService.invalidate(CACHE_KEYS.MY_PROFILE(CacheService.userId()));
+    return data;
+  },
+
+  async getGroups(): Promise<Group[]> {
+    const response = await authFetch(`${API_BASE}/groups`);
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch groups');
+    }
+
+    const data = (await response.json()) as Group[];
+    CacheService.set(CACHE_KEYS.GROUPS(CacheService.userId()), data);
+    return data;
+  },
+
+  async getGroup(groupId: string): Promise<Group> {
+    const response = await authFetch(`${API_BASE}/groups/${groupId}`);
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch group');
+    }
+
+    const data = (await response.json()) as Group;
+    CacheService.set(CACHE_KEYS.GROUP(CacheService.userId(), groupId), data);
+    return data;
+  },
+
+  async createGroup(data: { name: string; type: GroupType; description?: string }): Promise<Group> {
+    const response = await authFetch(`${API_BASE}/groups`, {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+
+    if (!response.ok) {
+      const error = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(error.error || 'Failed to create group');
+    }
+
+    const result = (await response.json()) as Group;
+    CacheService.invalidate(CACHE_KEYS.GROUPS(CacheService.userId()));
+    return result;
+  },
+
+  async updateGroup(groupId: string, updates: { name?: string; description?: string }): Promise<Group> {
+    const response = await authFetch(`${API_BASE}/groups/${groupId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates)
+    });
+
+    if (!response.ok) {
+      const error = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(error.error || 'Failed to update group');
+    }
+
+    const result = (await response.json()) as Group;
+    CacheService.invalidate(CACHE_KEYS.GROUP(CacheService.userId(), groupId));
+    CacheService.invalidate(CACHE_KEYS.GROUPS(CacheService.userId()));
+    return result;
+  },
+
+  async deleteGroup(groupId: string) {
+    const response = await authFetch(`${API_BASE}/groups/${groupId}`, {
+      method: 'DELETE'
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to delete group');
+    }
+
+    const result = await response.json();
+    CacheService.invalidate(CACHE_KEYS.GROUP(CacheService.userId(), groupId));
+    CacheService.invalidate(CACHE_KEYS.GROUPS(CacheService.userId()));
+    return result;
+  },
+
+  async addGroupMember(groupId: string, data: { memberEmail: string; role?: MemberRole; designation?: string }): Promise<Group> {
+    const response = await authFetch(`${API_BASE}/groups/${groupId}/members`, {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+
+    if (!response.ok) {
+      const error = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(error.error || 'Failed to add member');
+    }
+
+    const result = (await response.json()) as Group;
+    CacheService.invalidate(CACHE_KEYS.GROUPS(CacheService.userId()));
+    return result;
+  },
+
+  async updateGroupMember(groupId: string, memberId: string, updates: { role?: GroupMember['role']; designation?: string }): Promise<Group> {
+    const response = await authFetch(`${API_BASE}/groups/${groupId}/members/${memberId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates)
+    });
+
+    if (!response.ok) {
+      const error = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(error.error || 'Failed to update member');
+    }
+
+    const result = (await response.json()) as Group;
+    CacheService.invalidate(CACHE_KEYS.GROUP(CacheService.userId(), groupId));
+    CacheService.invalidate(CACHE_KEYS.GROUPS(CacheService.userId()));
+    return result;
+  },
+
+  async removeGroupMember(groupId: string, memberId: string): Promise<Group> {
+    const response = await authFetch(`${API_BASE}/groups/${groupId}/members/${memberId}`, {
+      method: 'DELETE'
+    });
+
+    if (!response.ok) {
+      const error = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(error.error || 'Failed to remove member');
+    }
+
+    const result = (await response.json()) as Group;
+    CacheService.invalidate(CACHE_KEYS.GROUP(CacheService.userId(), groupId));
+    CacheService.invalidate(CACHE_KEYS.GROUPS(CacheService.userId()));
+    return result;
+  },
+
+  async addSubgroup(groupId: string, name: string, description?: string): Promise<Subgroup[]> {
+    const response = await authFetch(`${API_BASE}/groups/${groupId}/subgroups`, {
+      method: 'POST',
+      body: JSON.stringify({ name, description })
+    });
+
+    if (!response.ok) {
+      const error = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(error.error || 'Failed to create subgroup');
+    }
+
+    const result = (await response.json()) as Subgroup[];
+    CacheService.invalidate(CACHE_KEYS.GROUP(CacheService.userId(), groupId));
+    return result;
+  },
+
+  async updateSubgroup(groupId: string, subgroupId: string, name: string, description?: string): Promise<Subgroup[]> {
+    const response = await authFetch(`${API_BASE}/groups/${groupId}/subgroups/${subgroupId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name, description })
+    });
+
+    if (!response.ok) {
+      const error = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(error.error || 'Failed to update subgroup');
+    }
+
+    const result = (await response.json()) as Subgroup[];
+    CacheService.invalidate(CACHE_KEYS.GROUP(CacheService.userId(), groupId));
+    return result;
+  },
+
+  async deleteSubgroup(groupId: string, subgroupId: string): Promise<Subgroup[]> {
+    const response = await authFetch(`${API_BASE}/groups/${groupId}/subgroups/${subgroupId}`, {
+      method: 'DELETE'
+    });
+
+    if (!response.ok) {
+      const error = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(error.error || 'Failed to delete subgroup');
+    }
+
+    const result = (await response.json()) as Subgroup[];
+    CacheService.invalidate(CACHE_KEYS.GROUP(CacheService.userId(), groupId));
+    CacheService.invalidate(CACHE_KEYS.GROUP_MESSAGES(CacheService.userId(), groupId, subgroupId));
+    return result;
+  },
+
+  async assignProjectToGroup(groupId: string, projectId: string) {
+    const response = await authFetch(`${API_BASE}/groups/${groupId}/projects/${projectId}`, {
+      method: 'POST'
+    });
+
+    if (!response.ok) {
+      const error = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(error.error || 'Failed to assign project');
+    }
+
+    const result = await response.json();
+    CacheService.invalidate(CACHE_KEYS.GROUP(CacheService.userId(), groupId));
+    CacheService.invalidate(CACHE_KEYS.GROUPS(CacheService.userId()));
+    CacheService.invalidate(CACHE_KEYS.PROJECT(CacheService.userId(), projectId));
+    CacheService.invalidatePrefix(projectListPrefix());
+    return result;
+  },
+
+  async unassignProjectFromGroup(groupId: string, projectId: string) {
+    const response = await authFetch(`${API_BASE}/groups/${groupId}/projects/${projectId}`, {
+      method: 'DELETE'
+    });
+
+    if (!response.ok) {
+      const error = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(error.error || 'Failed to unassign project');
+    }
+
+    const result = await response.json();
+    CacheService.invalidate(CACHE_KEYS.GROUP(CacheService.userId(), groupId));
+    CacheService.invalidate(CACHE_KEYS.GROUPS(CacheService.userId()));
+    CacheService.invalidate(CACHE_KEYS.PROJECT(CacheService.userId(), projectId));
+    CacheService.invalidatePrefix(projectListPrefix());
+    return result;
+  },
+
+  async getGroupMessages(groupId: string, subgroupId?: string): Promise<ChatMessage[]> {
+    const url = subgroupId
+      ? `${API_BASE}/groups/${groupId}/messages?subgroupId=${encodeURIComponent(subgroupId)}`
+      : `${API_BASE}/groups/${groupId}/messages`;
+
+    const response = await authFetch(url);
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch messages');
+    }
+
+    const data = (await response.json()) as ChatMessage[];
+    CacheService.set(CACHE_KEYS.GROUP_MESSAGES(CacheService.userId(), groupId, subgroupId || 'general'), data);
+    return data;
+  },
+
+  async sendGroupMessage(groupId: string, data: { content: string; subgroupId?: string; visibility?: MessageVisibility }): Promise<ChatMessage> {
+    const response = await authFetch(`${API_BASE}/groups/${groupId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+
+    if (!response.ok) {
+      const error = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(error.error || 'Failed to send message');
+    }
+
+    return (await response.json()) as ChatMessage;
+  },
+
+  async getDirectMessages(recipientId: string): Promise<ChatMessage[]> {
+    const response = await authFetch(`${API_BASE}/messages/direct/${recipientId}`);
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch messages');
+    }
+
+    const data = (await response.json()) as ChatMessage[];
+    CacheService.set(CACHE_KEYS.DIRECT_MESSAGES(CacheService.userId(), recipientId), data);
+    return data;
+  },
+
+  async sendDirectMessage(recipientId: string, content: string): Promise<ChatMessage> {
+    const response = await authFetch(`${API_BASE}/messages/direct/${recipientId}`, {
+      method: 'POST',
+      body: JSON.stringify({ content })
+    });
+
+    if (!response.ok) {
+      const error = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(error.error || 'Failed to send message');
+    }
+
+    return (await response.json()) as ChatMessage;
+  },
+
+  async getProjectIssues(projectId: string): Promise<AnnotationIssue[]> {
+    const response = await authFetch(`${API_BASE}/projects/${projectId}/issues`);
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch issues');
+    }
+
+    const data = (await response.json()) as AnnotationIssue[];
+    CacheService.set(CACHE_KEYS.PROJECT_ISSUES(CacheService.userId(), projectId), data);
+    return data;
+  },
+
+  async getPinIssue(pinId: string): Promise<AnnotationIssue | null> {
+    const response = await authFetch(`${API_BASE}/pins/${pinId}/issue`);
+
+    if (!response.ok) {
+      if (response.status === 403) {
+        return null;
+      }
+      throw new Error('Failed to fetch issue');
+    }
+
+    const data = (await response.json()) as AnnotationIssue | null;
+    CacheService.set(CACHE_KEYS.PIN_ISSUE(CacheService.userId(), pinId), data);
+    return data;
+  },
+
+  async deletePinIssue(pinId: string): Promise<unknown> {
+    const response = await authFetch(`${API_BASE}/pins/${pinId}/issue`, {
+      method: 'DELETE'
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to delete issue for pin');
+    }
+
+    const result = await response.json();
+    CacheService.invalidate(CACHE_KEYS.PIN_ISSUE(CacheService.userId(), pinId));
+    return result;
+  },
+
+  async savePinIssue(pinId: string, data: {
+    projectId?: string;
+    assigneeId?: string | null;
+    status?: AnnotationIssueStatus;
+    labels?: string[];
+  }): Promise<AnnotationIssue> {
+    const response = await authFetch(`${API_BASE}/pins/${pinId}/issue`, {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+
+    if (!response.ok) {
+      const error = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(error.error || 'Failed to save issue');
+    }
+
+    const result = (await response.json()) as AnnotationIssue;
+    CacheService.invalidate(CACHE_KEYS.PIN_ISSUE(CacheService.userId(), pinId));
+    if (result.projectId) {
+      CacheService.invalidate(CACHE_KEYS.PROJECT_ISSUES(CacheService.userId(), result.projectId));
+    }
+    return result;
+  },
+
+  async updateIssueStatus(issueId: string, status: AnnotationIssueStatus): Promise<AnnotationIssue> {
+    const response = await authFetch(`${API_BASE}/issues/${issueId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status })
+    });
+
+    if (!response.ok) {
+      const error = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(error.error || 'Failed to update status');
+    }
+
+    const result = (await response.json()) as AnnotationIssue;
+    if (result.projectId) {
+      CacheService.invalidate(CACHE_KEYS.PROJECT_ISSUES(CacheService.userId(), result.projectId));
+    }
+    if (result.pinId) {
+      CacheService.invalidate(CACHE_KEYS.PIN_ISSUE(CacheService.userId(), result.pinId));
+    }
+    return result;
+  },
+
+  async getIssueMessages(issueId: string): Promise<AnnotationMessage[]> {
+    const response = await authFetch(`${API_BASE}/issues/${issueId}/messages`);
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch issue messages');
+    }
+
+    const data = (await response.json()) as AnnotationMessage[];
+    CacheService.set(CACHE_KEYS.ISSUE_MESSAGES(CacheService.userId(), issueId), data);
+    return data;
+  },
+
+  async sendIssueMessage(issueId: string, content: string, visibility: MessageVisibility = 'all'): Promise<AnnotationMessage> {
+    const response = await authFetch(`${API_BASE}/issues/${issueId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ content, visibility })
+    });
+
+    if (!response.ok) {
+      const error = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(error.error || 'Failed to send message');
+    }
+
+    return (await response.json()) as AnnotationMessage;
   }
 };

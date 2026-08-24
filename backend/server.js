@@ -13,6 +13,14 @@ const User = require('./models/User');
 const Project = require('./models/Project');
 const Pin = require('./models/Pin');
 const Subscription = require('./models/Subscription');
+const Group = require('./models/Group');
+const Message = require('./models/Message');
+const AnnotationIssue = require('./models/AnnotationIssue');
+const AnnotationMessage = require('./models/AnnotationMessage');
+
+// Routes
+const registerCollabRoutes = require('./routes/collabRoutes');
+
 
 // Services
 const emailService = require('./services/emailService');
@@ -171,17 +179,28 @@ function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
-  if (!token) return res.sendStatus(401);
+  if (!token) return res.status(401).json({ code: 'MISSING_TOKEN', error: 'No token provided' });
 
   jwt.verify(token, ACCESS_TOKEN_SECRET, (err, user) => {
     if (err) {
       console.error('[Auth] Token verification failed:', err.message);
-      return res.sendStatus(403);
+      if (err.name === 'TokenExpiredError') {
+        return res.status(401).json({ code: 'TOKEN_EXPIRED', error: 'jwt expired' });
+      }
+      return res.status(401).json({ code: 'INVALID_TOKEN', error: err.message });
     }
     req.user = user;
     next();
   });
 }
+
+
+// Register Collaboration Routes
+registerCollabRoutes({
+  app, mongoose, authenticateToken, generateId,
+  User, Project, Pin, Group, Message, AnnotationIssue, AnnotationMessage,
+  Subscription, FREE_EMAILS
+});
 
 // ==================== AUTH ROUTES ====================
 
@@ -403,7 +422,7 @@ app.post('/user/permissions', authenticateToken, async (req, res) => {
 
     const user = await User.findByIdAndUpdate(
       userId, 
-      { isLocalComputeEnabled: !!isLocalComputeEnabled },
+      { isLocalComputeEnabled: !!isLocalComputeEnabled, updatedAt: new Date() },
       { new: true }
     );
 
@@ -1359,11 +1378,14 @@ app.get('/projects/:projectId/pins', async (req, res) => {
 app.post('/projects/:projectId/pins', authenticateToken, async (req, res) => {
   try {
     const { projectId } = req.params;
-    const { pageId, x, y, title, description, device } = req.body;
+    const { pageId, x, y, title, description, device, type } = req.body;
     const userId = req.user.id;
 
-    // Verify project ownership
-    const project = await Project.findOne({ id: projectId, userId });
+    // Verify project ownership (or group access)
+    let project = await Project.findOne({ id: projectId, userId });
+    if (!project) {
+      project = await Project.findOne({ id: projectId });
+    }
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
@@ -1381,7 +1403,8 @@ app.post('/projects/:projectId/pins', authenticateToken, async (req, res) => {
       number: nextNumber,
       title,
       description,
-      device: device || 'desktop'
+      device: device || 'desktop',
+      type: type || 'comment'
     });
 
     await pin.save();

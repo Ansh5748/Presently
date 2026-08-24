@@ -33,6 +33,11 @@ const pinSchema = new mongoose.Schema({
   },
   description: String,
   device: String,
+  type: {
+    type: String,
+    enum: ['issue', 'comment'],
+    default: 'comment'
+  },
   createdAt: {
     type: Date,
     default: Date.now

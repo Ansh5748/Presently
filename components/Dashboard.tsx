@@ -3,10 +3,10 @@ import { StorageService } from '../services/storageService';
 import { ApiService } from '../services/apiService';
 import { fetchScreenshotAsBase64 } from '../services/screenshotService';
 import { SubscriptionModal } from './SubscriptionModal';
-import { Project, ProjectStatus } from '../types';
+import { GroupManagementModal } from './GroupManagementModal';
+import { Project, ProjectStatus, ProjectMode, Group, GroupType } from '../types';
 import logoImg from '../src/assets/presently_logo.png'; 
-import adminImg from '../src/assets/admin.png';
-import { Plus, ExternalLink, Trash2, Loader2, ArrowRight, LogOut, Crown, Laptop, CheckCircle, XCircle, Info, FileText, Mail, Users, DollarSign, Activity, Ban, Gift } from 'lucide-react';
+import { Plus, ExternalLink, Trash2, Loader2, ArrowRight, LogOut, Crown, Laptop, CheckCircle, XCircle, Users, DollarSign, Activity, Ban, Gift, MessageCircle, Settings, Briefcase, Play, Wrench } from 'lucide-react';
 
 const SPECIAL_EMAILS = [
   'divyanshgupta5748@gmail.com',
@@ -20,8 +20,9 @@ interface DashboardProps {
 
 export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) => {
   const [projects, setProjects] = useState<Project[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
   const [isCreating, setIsCreating] = useState(false);
-  const [newProjectData, setNewProjectData] = useState({ name: '', websiteUrl: '', clientName: '' });
+  const [newProjectData, setNewProjectData] = useState<{ name: string; websiteUrl: string; clientName: string; groupId: string; mode: ProjectMode }>({ name: '', websiteUrl: '', clientName: '', groupId: 'none', mode: 'present' });
   const [loading, setLoading] = useState(false);
   const [userName, setUserName] = useState('');
   const [userEmail, setUserEmail] = useState('');
@@ -32,6 +33,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
   const [isExpired, setIsExpired] = useState(false);
   const [showPendingModal, setShowPendingModal] = useState(false);
   const [subscriptionModalMode, setSubscriptionModalMode] = useState<'default' | 'expired' | 'subscribe'>('default');
+  const [showGroupManagement, setShowGroupManagement] = useState(false);
   
   // Permission State
   const [showPermissionModal, setShowPermissionModal] = useState(false);
@@ -40,7 +42,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
 
   // Admin State
   const [adminPendingSubs, setAdminPendingSubs] = useState<any[]>([]);
-  const [showFooterModal, setShowFooterModal] = useState<'about' | 'terms' | null>(null);
   const [adminStats, setAdminStats] = useState<any>(null);
   const [adminAllSubs, setAdminAllSubs] = useState<any[]>([]);
   const [grantEmail, setGrantEmail] = useState('');
@@ -53,8 +54,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
       setUserName(user.name);
       setUserEmail(user.email);
       setIsLocalComputeEnabled(user.isLocalComputeEnabled || false);
-      loadProjects();
-      checkSubscription();
+      void Promise.all([
+        loadProjects(),
+        loadGroups(),
+        checkSubscription()
+      ]);
       
       if (!user.isLocalComputeEnabled && !SPECIAL_EMAILS.includes(user.email.toLowerCase())) {
         setShowPermissionModal(true);
@@ -64,7 +68,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
         loadAdminData();
       }
     } else {
-      onNavigate('/login');
+      onNavigate('/');
     }
   }, []);
 
@@ -75,10 +79,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
     } catch (error) {
       if ((error as any).status === 401 || (error as any).status === 403 || ((error as any).response && ((error as any).response.status === 401 || (error as any).response.status === 403))) {
         StorageService.clearUser();
-        onNavigate('/login');
+        onNavigate('/');
         return;
       }
       console.error('[Dashboard] Failed to load projects:', error);
+    }
+  };
+
+  const loadGroups = async () => {
+    try {
+      const groupsData = await ApiService.getGroups();
+      setGroups(groupsData);
+    } catch (error) {
+      console.error('[Dashboard] Failed to load groups:', error);
     }
   };
 
@@ -111,7 +124,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
     } catch (error) {
       if ((error as any).status === 401 || (error as any).status === 403 || ((error as any).response && ((error as any).response.status === 401 || (error as any).response.status === 403))) {
         StorageService.clearUser();
-        onNavigate('/login');
+        onNavigate('/');
         return;
       }
       console.error('[Dashboard] Failed to check subscription:', error);
@@ -206,26 +219,28 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
       const payload: any = {
         ...newProjectData,
         initialPageUrl: screenshotBase64,
+        groupId: newProjectData.groupId === 'none' ? undefined : newProjectData.groupId,
+        mode: newProjectData.mode,
       };
 
       const newProject = await ApiService.createProject(payload);
 
       setProjects([newProject, ...projects]);
       setIsCreating(false);
-      setNewProjectData({ name: '', websiteUrl: '', clientName: '' });
+      setNewProjectData({ name: '', websiteUrl: '', clientName: '', groupId: 'none', mode: 'present' });
       
       onNavigate(`/project/${newProject.id}`);
     } catch (error: any) {
       if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
         StorageService.clearUser();
-        onNavigate('/login');
+        onNavigate('/');
         return;
       }
       if (error.message === 'SUBSCRIPTION_REQUIRED') {
         setIsCreating(false);
         setShowSubscriptionModal(true);
       } else {
-        if (error.message === "User not authenticated.") onNavigate('/login');
+        if (error.message === "User not authenticated.") onNavigate('/');
         alert("Failed to create project. Make sure the screenshot service is running and the URL is valid.");
       }
     } finally {
@@ -242,7 +257,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
       } catch (error: any) {
         if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
           StorageService.clearUser();
-          onNavigate('/login');
+          onNavigate('/');
           return;
         }
          alert('Failed to delete project');
@@ -342,6 +357,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
           <img src={logoImg} alt="Presently Logo" className="h-12 w-auto object-contain" />
           <h1 className="text-3xl font-bold text-slate-900">Projects</h1>
           <p className="text-slate-500 mt-1">Welcome, <span className="font-medium text-slate-600">{userName || 'Guest'}</span></p>
+          </div>
           {!loadingSubscription && !hasActiveSubscription && !pendingVerification && (
             <p className="w-full sm:w-auto text-amber-600 text-sm mt-1 flex items-center gap-1">
               <Crown size={14} />
@@ -349,7 +365,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
             </p>
           )}
           {pendingVerification && <p className="text-blue-600 text-sm mt-1">Payment verification pending...</p>}
-        </div>
+        
         </div>
         <div className="flex flex-row items-center gap-3 md:gap-4 w-full md:w-auto">
           {!loadingSubscription && !hasActiveSubscription && !pendingVerification && (
@@ -361,7 +377,21 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
               Subscribe
             </button>
           )}
-          <div className='flex flex-row ml-auto sm:ml-0'>
+          <div className='flex flex-row ml-auto sm:ml-0 gap-2'>
+          <button
+            onClick={() => setShowGroupManagement(true)}
+            className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 rounded-lg transition-all font-semibold"
+          >
+            <Settings className="w-4 h-4 mr-1" />
+            Groups
+          </button>
+          <button
+            onClick={() => onNavigate('/chats')}
+            className="flex items-center gap-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-4 py-2.5 rounded-lg transition-all font-semibold"
+          >
+            <MessageCircle className="w-4 h-4 mr-1" />
+            Chat
+          </button>
           <button 
             onClick={handleNewProjectClick}
             className="flex items-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-5 py-2.5 rounded-lg transition-all shadow-sm font-small"
@@ -519,14 +549,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
 
       {isCreating && (
         <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 backdrop-blur-sm">
-          <div className="bg-white rounded-xl shadow-2xl p-8 w-full max-w-md animate-fade-in">
+          <div className="bg-white rounded-xl shadow-2xl p-8 w-full max-w-lg animate-fade-in max-h-[90vh] overflow-y-auto">
             <h2 className="text-xl font-bold mb-6 text-slate-900">Create New Project</h2>
             <form onSubmit={handleCreate} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Project Name</label>
-                <input 
+                <input
                   required
-                  type="text" 
+                  type="text"
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   placeholder="e.g. E-Commerce Redesign"
                   value={newProjectData.name}
@@ -535,8 +565,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Client Name (Optional)</label>
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   placeholder="e.g. Acme Corp"
                   value={newProjectData.clientName}
@@ -545,29 +575,69 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Website URL</label>
-                <input 
+                <input
                   required
-                  type="url" 
+                  type="url"
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   placeholder="https://example.com"
                   value={newProjectData.websiteUrl}
                   onChange={e => setNewProjectData({...newProjectData, websiteUrl: e.target.value})}
                 />
-                {/* <p className="text-xs text-slate-500 mt-2">
-                  System will capture Home, About, and Contact pages automatically.
-                </p> */}
               </div>
-              
+
+              <div>
+                <label className="flex items-center gap-1.5 text-sm font-medium text-slate-700 mb-1.5">
+                  <Briefcase className="w-3.5 h-3.5" />Assign to Group (Optional)
+                </label>
+                <select
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  value={newProjectData.groupId}
+                  onChange={e => setNewProjectData({...newProjectData, groupId: e.target.value})}
+                >
+                  <option value="none">— None —</option>
+                  {groups.map(g => (
+                    <option key={g.id} value={g.id}>
+                      {g.type === 'team' ? '👥' : '🏢'} {g.name} ({g.type})
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-slate-500 mt-1">You can change this later.</p>
+              </div>
+
+              <div>
+                <label className="flex items-center gap-1.5 text-sm font-medium text-slate-700 mb-1.5">
+                  <Wrench className="w-3.5 h-3.5" />Project Mode
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className={`flex items-start gap-3 p-3 rounded-lg border-2 cursor-pointer transition ${newProjectData.mode === 'present' ? 'border-indigo-600 bg-indigo-50' : 'border-slate-200 hover:bg-slate-50'}`}>
+                    <input type="radio" className="sr-only" checked={newProjectData.mode === 'present'} onChange={() => setNewProjectData({...newProjectData, mode: 'present'})} />
+                    <Play className={`w-5 h-5 mt-0.5 ${newProjectData.mode === 'present' ? 'text-indigo-600' : 'text-slate-400'}`} />
+                    <div>
+                      <div className={`font-semibold text-sm ${newProjectData.mode === 'present' ? 'text-indigo-700' : 'text-slate-700'}`}>Present</div>
+                      <div className="text-xs text-slate-500 mt-0.5">Classic annotations, perfect for walkthroughs & presentations.</div>
+                    </div>
+                  </label>
+                  <label className={`flex items-start gap-3 p-3 rounded-lg border-2 cursor-pointer transition ${newProjectData.mode === 'working' ? 'border-indigo-600 bg-indigo-50' : 'border-slate-200 hover:bg-slate-50'}`}>
+                    <input type="radio" className="sr-only" checked={newProjectData.mode === 'working'} onChange={() => setNewProjectData({...newProjectData, mode: 'working'})} />
+                    <Wrench className={`w-5 h-5 mt-0.5 ${newProjectData.mode === 'working' ? 'text-indigo-600' : 'text-slate-400'}`} />
+                    <div>
+                      <div className={`font-semibold text-sm ${newProjectData.mode === 'working' ? 'text-indigo-700' : 'text-slate-700'}`}>Working</div>
+                      <div className="text-xs text-slate-500 mt-0.5">Assign issues, statuses, labels & threaded chat on annotations.</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
               <div className="flex justify-end gap-3 mt-6">
-                <button 
-                  type="button" 
+                <button
+                  type="button"
                   onClick={() => setIsCreating(false)}
                   className="px-4 py-2 text-slate-600 hover:text-slate-900 font-medium"
                 >
                   Cancel
                 </button>
-                <button 
-                  type="submit" 
+                <button
+                  type="submit"
                   disabled={loading}
                   className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium disabled:opacity-50"
                 >
@@ -579,6 +649,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
           </div>
         </div>
       )}
+
+      {/* Group Management Modal */}
+      <GroupManagementModal
+        isOpen={showGroupManagement}
+        onClose={() => setShowGroupManagement(false)}
+        onGroupChange={loadGroups}
+        onNavigate={onNavigate}
+      />
 
       {projects.length === 0 ? (
         <div className="text-center py-20 bg-white rounded-xl border border-slate-200 border-dashed">
@@ -641,117 +719,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
               </div>
             );
           })}
-        </div>
-      )}
-
-      {/* Footer */}
-      <footer className="mt-20 border-t border-slate-200 pt-8 pb-12">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 text-center md:text-left">
-          <div>
-            <h3 className="font-bold text-slate-900 mb-4 flex items-center justify-center md:justify-start gap-2">
-              <Info size={18} /> About Us
-            </h3>
-            <button onClick={() => setShowFooterModal('about')} className="text-slate-600 hover:text-blue-600 text-sm">
-              Our Mission & Team
-            </button>
-          </div>
-          <div>
-            <h3 className="font-bold text-slate-900 mb-4 flex items-center justify-center md:justify-start gap-2">
-              <FileText size={18} /> Legal
-            </h3>
-            <button onClick={() => setShowFooterModal('terms')} className="text-slate-600 hover:text-blue-600 text-sm">
-              Terms & Conditions
-            </button>
-          </div>
-          <div>
-            <h3 className="font-bold text-slate-900 mb-4 flex items-center justify-center md:justify-start gap-2">
-              <Mail size={18} /> Contact
-            </h3>
-            <a href="mailto:dishlook.contact@gmail.com" className="text-slate-600 hover:text-blue-600 text-sm">
-              Contact Support
-            </a>
-          </div>
-        </div>
-      </footer>
-
-      {/* Footer Modals */}
-      {showFooterModal && (
-        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 relative animate-in fade-in zoom-in-95">
-            <button 
-              onClick={() => setShowFooterModal(null)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"
-            >
-              <Trash2 size={20} className="rotate-45" /> {/* Using Trash icon rotated as close for style or import X */}
-            </button>
-
-            {showFooterModal === 'about' && (
-              <div className="text-center">
-                <img src={adminImg} alt="Divyansh Gupta" className="w-24 h-24 rounded-full mx-auto mb-4 object-cover border-4 border-slate-100" />
-                <h2 className="text-2xl font-bold text-slate-900 mb-1">Divyansh Gupta</h2>
-                <p className="text-blue-600 font-medium mb-4">Founder & CEO</p>
-                <p className="text-slate-600 leading-relaxed text-sm">
-                  Presently is the ultimate collaboration tool designed for freelancers, agencies, and SaaS companies.
-                </p>
-                
-                <div className="text-left mt-6 space-y-4 text-sm text-slate-600 max-h-[50vh] overflow-y-auto pr-2 custom-scrollbar">
-                  <h3 className="font-bold text-slate-900 border-b pb-2">Who uses Presently?</h3>
-                  
-                  <div className="space-y-4">
-                    <div>
-                      <h4 className="font-semibold text-blue-600 mb-1">For Creative & Tech Teams</h4>
-                      <ul className="list-disc pl-4 space-y-1">
-                        <li><strong>Freelancers:</strong> Share live previews and get sign-off without meetings.</li>
-                        <li><strong>Agencies:</strong> Manage 50+ client projects and streamline QA.</li>
-                        <li><strong>SaaS Builders:</strong> Collect visual bug reports from beta testers.</li>
-                        <li><strong>Developers:</strong> Test responsiveness across mobile/desktop views.</li>
-                        <li><strong>QA Engineers:</strong> Log visual defects with exact coordinates.</li>
-                        <li><strong>Product Managers:</strong> Visualize roadmap changes on existing pages.</li>
-                      </ul>
-                    </div>
-                    
-                    <div>
-                      <h4 className="font-semibold text-purple-600 mb-1">For Business & Marketing</h4>
-                      <ul className="list-disc pl-4 space-y-1">
-                        <li><strong>Marketers:</strong> Audit landing pages and ad placements.</li>
-                        <li><strong>SEO Specialists:</strong> Highlight on-page optimization opportunities.</li>
-                        <li><strong>Copywriters:</strong> Review text in context of the final design.</li>
-                        <li><strong>Sales Teams:</strong> Annotate prospect websites for personalized demos.</li>
-                        <li><strong>Recruiters:</strong> Review and annotate candidate portfolios.</li>
-                      </ul>
-                    </div>
-
-                    <div>
-                      <h4 className="font-semibold text-amber-600 mb-1">For Specialized Sectors</h4>
-                      <ul className="list-disc pl-4 space-y-1">
-                        <li><strong>E-commerce:</strong> Audit checkout flows and product displays.</li>
-                        <li><strong>Legal/Compliance:</strong> Archive and verify ToS/Privacy pages.</li>
-                        <li><strong>Education:</strong> Grade web design assignments visually.</li>
-                        <li><strong>Real Estate:</strong> Annotate property listings for updates.</li>
-                        <li><strong>Non-Profits:</strong> Optimize donor journeys and campaign pages.</li>
-                        <li><strong>Healthcare:</strong> Review patient portal usability and compliance.</li>
-                        <li><strong>Finance:</strong> Audit banking dashboards for clarity.</li>
-                        <li><strong>Travel:</strong> Verify booking engines and itinerary displays.</li>
-                        <li><strong>Startups:</strong> Share visual progress updates with investors.</li>
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {showFooterModal === 'terms' && (
-              <div>
-                <h2 className="text-2xl font-bold text-slate-900 mb-4">Terms & Conditions</h2>
-                <div className="space-y-4 text-slate-600 text-sm max-h-[60vh] overflow-y-auto pr-2">
-                  <p><strong>1. Services:</strong> Presently provides screenshot and annotation tools for web projects.</p>
-                  <p><strong>2. No Refunds:</strong> All payments are final. We do not offer refunds for subscription plans once activated. Please verify your needs before subscribing.</p>
-                  <p><strong>3. Usage:</strong> You agree to use the platform for lawful purposes only. We reserve the right to terminate accounts engaging in malicious activity.</p>
-                  <p><strong>4. Availability:</strong> While we strive for 99.9% uptime, services are provided "as is" without warranties of any kind.</p>
-                </div>
-              </div>
-            )}
-          </div>
         </div>
       )}
 
