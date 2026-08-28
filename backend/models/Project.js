@@ -11,7 +11,7 @@ const projectPageSchema = new mongoose.Schema({
   },
   imageUrl: {
     type: String,
-    required: true
+    required: false
   },
   mobileImageUrl: String,
   originalUrl: String,

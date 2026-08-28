@@ -76,12 +76,13 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({ isOp
         }
         return;
       }
-      if (manageView) {
-        const refreshed = g.find(x => x.id === manageView.group.id);
-        if (refreshed) setManageView({ ...manageView, group: refreshed });
-      }
+      setManageView(prev => {
+        if (!prev) return null;
+        const refreshed = g.find(x => x.id === prev.group.id);
+        return refreshed ? { ...prev, group: refreshed } : prev;
+      });
     } catch (e) { console.error(e); }
-  }, [initialGroupId, initialSub, lockToGroup, manageView]);
+  }, [initialGroupId, initialSub, lockToGroup]);
 
   const loadProjects = useCallback(async () => {
     try {

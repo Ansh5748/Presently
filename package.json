@@ -12,6 +12,7 @@
   "dependencies": {
     "@google/genai": "^1.31.0",
     "browser-image-compression": "^2.0.2",
+    "html2canvas": "^1.4.1",
     "lucide-react": "^0.555.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1"

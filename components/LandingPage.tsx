@@ -217,36 +217,61 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
       </section>
 
       {/* Footer */}
-      <footer className="border-t border-slate-200 pt-12 pb-16 px-4">
+      <footer className="border-t border-slate-200 pt-12 pb-16 px-4 bg-slate-900 text-slate-300">
         <div className="max-w-6xl mx-auto">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 text-center md:text-left">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-8 text-center md:text-left">
             <div>
-              <h3 className="font-bold text-slate-900 mb-4 flex items-center justify-center md:justify-start gap-2">
-                <Info size={18} /> About Us
+              <h3 className="font-bold text-white mb-4 flex items-center justify-center md:justify-start gap-2">
+                <Info size={18} className="text-blue-400" /> About Us
               </h3>
-              <button onClick={() => setShowFooterModal('about')} className="text-slate-600 hover:text-blue-600 text-sm">
+              <button onClick={() => setShowFooterModal('about')} className="text-slate-400 hover:text-white text-sm block mb-2 transition-colors">
                 Our Mission & Team
               </button>
             </div>
             <div>
-              <h3 className="font-bold text-slate-900 mb-4 flex items-center justify-center md:justify-start gap-2">
-                <FileText size={18} /> Legal
+              <h3 className="font-bold text-white mb-4 flex items-center justify-center md:justify-start gap-2">
+                <FileText size={18} className="text-blue-400" /> Legal & Policies
               </h3>
-              <button onClick={() => setShowFooterModal('terms')} className="text-slate-600 hover:text-blue-600 text-sm">
-                Terms & Conditions
-              </button>
+              <div className="space-y-2 text-sm">
+                <button onClick={() => onNavigate('/terms')} className="text-slate-400 hover:text-white block transition-colors">
+                  Terms & Conditions
+                </button>
+                <button onClick={() => onNavigate('/privacy')} className="text-slate-400 hover:text-white block transition-colors">
+                  Privacy Policy
+                </button>
+                <button onClick={() => onNavigate('/cookies')} className="text-slate-400 hover:text-white block transition-colors">
+                  Cookie Policy
+                </button>
+                <button onClick={() => onNavigate('/refund-policy')} className="text-slate-400 hover:text-white block transition-colors">
+                  Refund & Cancellation
+                </button>
+              </div>
             </div>
             <div>
-              <h3 className="font-bold text-slate-900 mb-4 flex items-center justify-center md:justify-start gap-2">
-                <Mail size={18} /> Contact
+              <h3 className="font-bold text-white mb-4 flex items-center justify-center md:justify-start gap-2">
+                <Mail size={18} className="text-blue-400" /> Support & Operations
               </h3>
-              <a href="mailto:dishlook.contact@gmail.com" className="text-slate-600 hover:text-blue-600 text-sm">
-                Contact Support
-              </a>
+              <div className="space-y-2 text-sm">
+                <button onClick={() => onNavigate('/support')} className="text-slate-400 hover:text-white block transition-colors">
+                  Support Hub & System Status
+                </button>
+                <a href="mailto:dishlook.contact@gmail.com" className="text-slate-400 hover:text-white block transition-colors">
+                  Contact Support Email
+                </a>
+              </div>
+            </div>
+            <div>
+              <h3 className="font-bold text-white mb-4">Presently Platform</h3>
+              <p className="text-xs text-slate-400 leading-relaxed mb-4">
+                Enterprise visual feedback, live website previews, and issue tracking for modern web teams.
+              </p>
+              <span className="inline-block px-2.5 py-1 bg-blue-500/20 text-blue-300 border border-blue-500/30 rounded-full text-xs font-mono">
+                v2.0 Production Ready
+              </span>
             </div>
           </div>
-          <div className="mt-12 pt-8 border-t border-slate-200 text-center">
-            <p className="text-slate-500 text-sm">© 2024 Presently. All rights reserved.</p>
+          <div className="mt-12 pt-8 border-t border-slate-800 text-center text-xs text-slate-500">
+            <p>© {new Date().getFullYear()} Presently. All rights reserved.</p>
           </div>
         </div>
       </footer>

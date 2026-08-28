@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "Presently Live Capture",
+  "short_name": "Presently",
+  "version": "1.0.0",
+  "description": "Captures fully rendered webpages in real Chrome for Presently.",
+
+  "permissions": [
+    "tabs",
+    "debugger",
+    "scripting"
+  ],
+
+  "host_permissions": [
+    "<all_urls>"
+  ],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "icons": {
+    "128": "presently_logo.png"
+  },
+
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ]
+}

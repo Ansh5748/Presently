@@ -386,16 +386,19 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
   return (
     <div className="min-h-screen bg-slate-50 font-sans flex flex-col">
       <nav className="bg-white border-b border-slate-200 sticky top-0 z-30 px-4 md:px-6 py-3 md:py-4 flex justify-between items-center shadow-sm flex-none">
-        <div className="flex items-center gap-3 flex-1 min-w-0">
-          <div className="h-6 w-px bg-slate-200"></div>
+        <div className="flex items-center gap-3 flex-1 min-w-0 flex-wrap md:flex-nowrap">
+          <div className="h-8 md:h-6 w-px bg-slate-200 shrink-0"></div>
           <span className="font-semibold text-slate-900 truncate">{project.name}</span>
           <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-full border ${isLiveView ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
             {isLiveView ? 'Live' : 'Draft'}
           </span>
           {isWorkingMode && (
-            <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded-full border bg-indigo-50 text-indigo-700 border-indigo-200">
-              Working Mode
-            </span>
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="md:hidden h-5 w-px bg-slate-200"></div>
+              <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded-full border bg-indigo-50 text-indigo-700 border-indigo-200 shrink-0 md:ml-0">
+                Working Mode
+              </span>
+            </div>
           )}
         </div>
         <div className="hidden md:block text-sm text-slate-500 text-right pr-4">

@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
-import { MessageCircle, Hash, Users, Building2, ChevronDown, ChevronRight, Send, Eye, Shield, Settings, Plus, UserCircle, ArrowLeft, ChevronUp, X, Pencil, Save } from 'lucide-react';
+import { MessageCircle, Hash, Users, Building2, ChevronDown, ChevronRight, Menu, Send, Eye, Shield, Settings, Plus, UserCircle, ArrowLeft, ChevronUp, X, Pencil, Save } from 'lucide-react';
 import { ApiService } from '../services/apiService';
 import { GroupManagementModal } from './GroupManagementModal';
 import type { Group, ChatMessage, Subgroup, UserSearchResult, MessageVisibility, UserProfile } from '../types';
@@ -53,6 +53,7 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
 
   const [groups, setGroups] = useState<Group[]>([]);
   const [groupsLoaded, setGroupsLoaded] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(true);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [target, setTarget] = useState<ChatTarget | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -171,9 +172,11 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
     initRef.current = true;
 
     const init = async () => {
-      await loadUserProfile();
-      await loadGroups();
-      await loadDMs();
+      await Promise.all([
+        loadUserProfile(),
+        loadGroups(),
+        loadDMs()
+      ]);
     };
 
     void init();
@@ -284,23 +287,42 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
   };
 
   const sendMessage = async () => {
-    if (!messageText.trim() || !target) return;
+    const text = messageText.trim();
+    if (!text || !target) return;
+
+    const tempId = `temp-${Date.now()}`;
+    const optimisticMsg: ChatMessage = {
+      id: tempId,
+      senderId: currentUserId,
+      senderName: currentUserName,
+      senderAvatar: getSelfAvatar(),
+      content: text,
+      visibility: visibility,
+      createdAt: new Date().toISOString()
+    } as any;
+
+    setMessages(prev => [...prev, optimisticMsg]);
+    setMessageText('');
     setSending(true);
+
     try {
       let msg: ChatMessage;
       if (target.kind === 'group') {
         msg = await ApiService.sendGroupMessage(target.groupId, {
-          content: messageText.trim(),
+          content: text,
           subgroupId: target.subgroupId || undefined,
           visibility
         });
       } else {
-        msg = await ApiService.sendDirectMessage(target.recipientId, messageText.trim());
+        msg = await ApiService.sendDirectMessage(target.recipientId, text);
       }
-      setMessages(prev => [...prev, msg]);
-      setMessageText('');
-    } catch (e) { console.error(e); }
-    finally { setSending(false); }
+      setMessages(prev => prev.map(m => m.id === tempId ? msg : m));
+    } catch (e) {
+      console.error(e);
+      setMessages(prev => prev.filter(m => m.id !== tempId));
+    } finally {
+      setSending(false);
+    }
   };
 
   const toggleGroup = (groupId: string) => {
@@ -309,6 +331,7 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
 
   const setTargetAndRoute = (t: ChatTarget) => {
     setTarget(t);
+    setMobileSidebarOpen(false);
     if (!onNavigate) return;
     if (t.kind === 'group') {
       const nextPath = t.subgroupId ? `/chats/${t.groupId}/${t.subgroupId}` : `/chats/${t.groupId}`;
@@ -427,6 +450,17 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
   }, [showProfile]);
 
   useEffect(() => {
+  if (!showProfile) return;
+
+  const originalOverflow = document.body.style.overflow;
+  document.body.style.overflow = 'hidden';
+
+  return () => {
+    document.body.style.overflow = originalOverflow;
+  };
+}, [showProfile]);
+
+  useEffect(() => {
     if (profileEditing) return;
     setTimeZoneOpen(false);
     setTimeZoneQuery('');
@@ -465,9 +499,20 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
 
   return (
     <>
-      <div className="w-full h-full flex bg-slate-50 overflow-hidden">
+      <div className="w-full h-full flex bg-slate-50 overflow-hidden min-w-0">
       {/* Sidebar */}
-      <div className="w-72 bg-slate-800 text-slate-100 flex flex-col flex-shrink-0 border-r border-slate-700">
+        <div
+          className={`
+            fixed inset-y-0 left-0 z-40
+            w-full bg-slate-800 text-slate-100 flex flex-col
+            border-r border-slate-700
+            transition-transform duration-300 ease-in-out
+            ${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+
+            md:relative md:inset-auto md:left-auto md:top-auto md:bottom-auto md:z-auto
+            md:w-72 md:flex-shrink-0 md:translate-x-0
+          `}
+        >
         <div className="p-4 border-b border-slate-700 bg-slate-900 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <MessageCircle className="w-5 h-5 text-indigo-400" />
@@ -484,6 +529,14 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
                 <ChevronRight className="w-4 h-4" />
               </button>
             )}
+            <button
+              onClick={() => setMobileSidebarOpen(false)}
+              className="md:hidden p-1.5 hover:bg-slate-700 rounded transition text-slate-300"
+              title="Hide sidebar"
+              aria-label="Hide sidebar"
+            >
+              <Menu className="w-4 h-4" />
+            </button>
           </div>
         </div>
 
@@ -625,7 +678,7 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
             <img src={profile?.avatarUrl || currentUserAvatar} alt={currentUserName} className="w-8 h-8 rounded-full object-cover" />
           ) : (
             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 text-white text-sm font-semibold flex items-center justify-center">
-              {currentUserName.charAt(0).toUpperCase()}
+              {(profileDraft.name || currentUserName).charAt(0).toUpperCase()}
             </div>
           )}
           <div className="flex-1 min-w-0 text-left">
@@ -642,7 +695,32 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
   </div>
 
       {/* Main Chat */}
-      <div className="flex-1 flex flex-col min-w-0">
+        <div className="flex-1 min-w-0 max-w-full flex flex-col overflow-hidden">
+          <div className="md:hidden h-12 flex items-center px-3 border-b bg-white flex-shrink-0">
+            {onNavigate && (
+              <button
+                onClick={() => onNavigate('/')}
+                className="p-2 rounded-lg hover:bg-slate-100 text-slate-600 flex-shrink-0"
+                title="Dashboard"
+                aria-label="Dashboard"
+              >
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+            )}
+
+            <span className="ml-2 font-semibold text-slate-700">
+              Channels
+            </span>
+
+            <button
+              onClick={() => setMobileSidebarOpen(true)}
+              className="ml-auto p-2 rounded-lg hover:bg-slate-100 text-slate-600 flex-shrink-0"
+              title="Open channels"
+              aria-label="Open channels"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+          </div>
         {!target ? (
           <div className="flex-1 flex flex-col items-center justify-center text-slate-400 p-8">
             <MessageCircle className="w-20 h-20 mb-6 opacity-20" />
@@ -654,7 +732,7 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
         ) : (
           <>
             {/* Header */}
-            <div className="px-6 py-3 border-b bg-white flex items-center gap-3 flex-shrink-0">
+            <div className="px-4 sm:px-6 py-3 border-b bg-white flex items-center gap-3 flex-shrink-0 min-w-0">
               {target.kind === 'group' ? (
                 <>
                   <Hash className="w-5 h-5 text-slate-400" />
@@ -689,7 +767,7 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-gradient-to-b from-white to-slate-50">
+            <div className="flex-1 min-w-0 overflow-y-auto p-4 sm:p-6 space-y-4 bg-gradient-to-b from-white to-slate-50">
               {loadingMessages && messages.length === 0 && (
                 <div className="text-center text-slate-400 text-sm py-10">Loading messages...</div>
               )}
@@ -713,7 +791,7 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
                         {getSenderInitial(m.senderId)}
                       </div>
                     )}
-                    <div className={`max-w-[70%] ${mine ? 'items-end' : 'items-start'} flex flex-col`}>
+                    <div className={`max-w-[85%] sm:max-w-[70%] ${mine ? 'items-end' : 'items-start'} flex flex-col min-w-0`}>
                       <div className={`flex items-center gap-2 text-xs text-slate-500 mb-1 ${mine ? 'flex-row-reverse' : ''}`}>
                         <span className="font-medium text-slate-600">{getSenderName(m.senderId)}</span>
                         <span>{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
@@ -734,7 +812,7 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
             </div>
 
             {/* Input */}
-            <div className="p-4 border-t bg-white flex-shrink-0">
+            <div className="p-3 sm:p-4 border-t bg-white flex-shrink-0">
               {target.kind === 'group' && (
                 <div className="flex gap-2 mb-2 items-center">
                   <span className="text-xs text-slate-500 mr-1">Visibility:</span>
@@ -754,7 +832,7 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
                   ) : null}
                 </div>
               )}
-              <div className="flex gap-2">
+              <div className="flex gap-2 min-w-0">
                 <textarea
                   className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 outline-none resize-none text-sm"
                   rows={2}
@@ -796,19 +874,34 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
         lockToGroup
       />
       {showProfile && (
-  <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
+  <div
+    className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-0 md:p-6 overscroll-none"
+    onTouchMove={(e) => {
+      if (e.target === e.currentTarget) {
+        e.preventDefault();
+      }
+    }}
+  >
     <div
       ref={profileRef}
-      className="w-full max-w-5xl h-[78vh] bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col"
+      className="
+        w-full h-full
+        md:max-w-5xl md:h-[78vh]
+        bg-white
+        rounded-none md:rounded-2xl
+        shadow-2xl
+        border-0 md:border border-slate-200
+        overflow-hidden overscroll-contain
+        flex flex-col
+      "
     >
-
-      <div className="flex items-center justify-between p-5 border-b">
+      <div className="flex items-center justify-between px-4 py-4 md:p-5 border-b flex-shrink-0">
         <div>
-          <h2 className="text-2xl font-bold text-slate-800">
+          <h2 className="text-xl md:text-2xl font-bold text-slate-800">
             Profile
           </h2>
 
-          <p className="text-sm text-slate-500 mt-1">
+          <p className="text-xs md:text-sm text-slate-500 mt-1">
             Manage your personal information
           </p>
         </div>
@@ -818,7 +911,7 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
         {!profileEditing && (
             <button
                 onClick={() => setProfileEditing(true)}
-                className="px-4 py-2 rounded-lg border border-slate-300 hover:bg-slate-100 flex items-center gap-2 transition"
+                className="px-3 md:px-4 py-2 rounded-lg border border-slate-300 hover:bg-slate-100 flex items-center gap-2 transition text-sm"
             >
                 <Pencil className="w-4 h-4"/>
                 Edit
@@ -835,15 +928,25 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
         </div>
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
-        <div className="w-80 border-r bg-slate-50 p-8 flex flex-col items-center space-y-6">
+      <div className="flex flex-1 flex-col md:flex-row overflow-y-auto md:overflow-hidden min-h-0">
+        <div className="
+  w-full md:w-80
+  md:border-r
+  border-b-0
+  bg-white md:bg-slate-50
+  px-5 py-3 md:p-8
+  flex flex-col items-center
+  space-y-3 md:space-y-6
+  flex-shrink-0
+  md:overflow-hidden
+">
         <div className="flex justify-center">
 
 <button
     type="button"
     disabled={!profileEditing}
     onClick={() => avatarInputRef.current?.click()}
-    className={`relative w-28 h-28 rounded-full overflow-hidden
+    className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full overflow-hidden
     ${profileEditing ? "cursor-pointer group" : ""}`}
 >
 
@@ -888,7 +991,7 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
 
         {/* Name */}
 
-        <div>
+        <div className="w-full">
           <label className="text-sm font-medium">Name</label>
 
           <input
@@ -906,7 +1009,7 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
 
         {/* Email */}
 
-        <div>
+        <div className="w-full">
           <label className="text-sm font-medium">Email</label>
 
           <input
@@ -918,7 +1021,7 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
 
         {/* Status */}
 
-        <div className="w-full">
+        <div className="w-full min-w-0 max-w-full">
           <label className="text-sm font-medium">
             Status
           </label>
@@ -926,30 +1029,35 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
           <select
             disabled={!profileEditing}
             value={profileDraft.statusText || "DND"}
-            onChange={(e)=>
+            onChange={(e) =>
               setProfileDraft({
                 ...profileDraft,
-                statusText:e.target.value
+                statusText: e.target.value
               })
             }
-            className="w-full mt-1 border rounded-lg p-2"
+            className="block w-full min-w-0 max-w-full mt-1 border rounded-lg p-2 text-sm bg-white overflow-hidden"
+            style={{
+              width: '100%',
+              maxWidth: '100%',
+              boxSizing: 'border-box'
+            }}
           >
-            <option>DND</option>
-            <option>Online</option>
-            <option>Available</option>
-            <option>Busy</option>
-            <option>In a Meeting</option>
-            <option>Focus Time</option>
-            <option>Away</option>
-            <option>AFK</option>
-            <option>Working Remotely</option>
-            <option>Out Sick</option>
-            <option>On Holiday</option>
+            <option value="DND">DND</option>
+            <option value="Online">Online</option>
+            <option value="Available">Available</option>
+            <option value="Busy">Busy</option>
+            <option value="In a Meeting">In a Meeting</option>
+            <option value="Focus Time">Focus Time</option>
+            <option value="Away">Away</option>
+            <option value="AFK">AFK</option>
+            <option value="Working Remotely">Working Remotely</option>
+            <option value="Out Sick">Out Sick</option>
+            <option value="On Holiday">On Holiday</option>
           </select>
         </div>
       </div>
 
-        <div className="flex-1 overflow-y-auto p-8 space-y-6">
+        <div className="flex-1 min-h-0 md:overflow-y-auto px-5 pt-2 pb-5 md:p-8 space-y-5 md:space-y-6">
         {/* Phone */}
 
         <div>
@@ -992,7 +1100,7 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
             </button>
 
             {timeZoneOpen && profileEditing && (
-              <div className="absolute z-50 mt-1 w-full bg-white border border-slate-200 rounded-lg shadow-lg overflow-hidden">
+              <div className="absolute z-50 mt-1 left-0 right-0 w-full max-w-full bg-white border border-slate-200 rounded-lg shadow-lg overflow-hidden">
                 <div className="p-2 border-b border-slate-100">
                   <input
                     value={timeZoneQuery}
@@ -1002,7 +1110,7 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
                     className="w-full border border-slate-200 rounded-md p-2 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                   />
                 </div>
-                <div className="max-h-64 overflow-auto">
+                <div className="max-h-64 overflow-y-auto overscroll-contain">
                   {filteredTimeZones.map(o => (
                     <button
                       key={o.value}
@@ -1025,9 +1133,9 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
 
         {/* Working Hours */}
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-3 min-w-0 w-full max-w-full">
 
-          <div>
+          <div className="min-w-0 w-full max-w-full">
             <label className="text-sm font-medium">
               Working Start
             </label>
@@ -1042,7 +1150,12 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
                   workingTimeStart:e.target.value
                 })
               }
-              className="w-full mt-1 border rounded-lg p-2"
+              className="block w-full min-w-0 max-w-full mt-1 border rounded-lg p-2 text-sm"
+                style={{
+                  width: '100%',
+                  maxWidth: '100%',
+                  boxSizing: 'border-box'
+                }}
             />
           </div>
 
@@ -1061,7 +1174,12 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
                   workingTimeEnd:e.target.value
                 })
               }
-              className="w-full mt-1 border rounded-lg p-2"
+              className="block w-full min-w-0 max-w-full mt-1 border rounded-lg p-2 text-sm"
+                style={{
+                  width: '100%',
+                  maxWidth: '100%',
+                  boxSizing: 'border-box'
+                }}
             />
           </div>
 
@@ -1090,7 +1208,7 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
       </div>
       </div>
 
-      <div className="border-t p-4 flex justify-end gap-2">
+      <div className="border-t px-4 py-3 md:p-4 flex justify-end gap-2 flex-shrink-0 bg-white">
 
         {profileEditing && (
         <>
@@ -1099,7 +1217,7 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
                     setProfileEditing(false);
                     setProfileDraft(profile || {});
                 }}
-                className="px-4 py-2 rounded-lg border border-slate-300"
+                className="px-4 py-2 rounded-lg border border-slate-300 text-sm"
             >
                 Cancel
             </button>
@@ -1107,7 +1225,7 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
             <button
                 onClick={saveProfile}
                 disabled={profileLoading}
-                className="px-5 py-2 rounded-lg bg-indigo-600 text-white"
+                className="px-5 py-2 rounded-lg bg-indigo-600 text-white text-sm"
             >
                 Save
             </button>

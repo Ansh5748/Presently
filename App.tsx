@@ -10,6 +10,15 @@ import { LandingPage } from './components/LandingPage';
 import { GroupsChatView } from './components/GroupsChatView';
 import { StorageService } from './services/storageService';
 import { AUTH_EVENT } from './services/apiService';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { NotFoundPage } from './components/NotFoundPage';
+import { PrivacyPolicyPage } from './components/PrivacyPolicyPage';
+import { TermsPage } from './components/TermsPage';
+import { CookiePolicyPage } from './components/CookiePolicyPage';
+import { CookieBanner } from './components/CookieBanner';
+import { RefundPolicyPage } from './components/RefundPolicyPage';
+import { MaintenanceSupportPage } from './components/MaintenanceSupportPage';
+import { FaqPage } from './components/FaqPage';
 
 type User = {
   id: string;
@@ -32,7 +41,6 @@ export const App: React.FC = () => {
       setPath(window.location.pathname);
     };
     const handleAuthError = (e: any) => {
-      // Clear session already done in apiService handler; navigate to landing
       setUser(null);
       const target = (e && e.detail && e.detail.target) || '/';
       window.history.pushState({}, '', target);
@@ -53,7 +61,6 @@ export const App: React.FC = () => {
     }
 
     window.history.pushState({}, '', newPath);
-    // Manually trigger a path update since pushState doesn't fire popstate
     setPath(newPath);
   };
 
@@ -69,20 +76,38 @@ export const App: React.FC = () => {
     handleNavigate('/');
   };
 
-  // Basic Routing Logic
+  // Comprehensive Production Routing Logic
   const renderRoute = () => {
-    // Publicly accessible "live" route
+    // 1. Publicly accessible "live" route (no auth required)
     if (path.startsWith('/live/')) {
       const id = path.split('/live/')[1];
       return <DeliveryView projectId={id} isLiveView={true} onNavigate={handleNavigate} />;
     }
-    // Draft preview route (will be protected)
-    if (path.startsWith('/draft/')) {
-      const id = path.split('/draft/')[1];
-      return <DeliveryView projectId={id} onNavigate={handleNavigate} />;
+
+    // 2. Universal Public Legal & Support Pages (accessible logged-in or logged-out)
+    if (path === '/privacy') {
+      return <PrivacyPolicyPage onNavigate={handleNavigate} />;
+    }
+    if (path === '/terms') {
+      return <TermsPage onNavigate={handleNavigate} />;
+    }
+    if (path === '/cookies' || path === '/cookie-policy') {
+      return <CookiePolicyPage onNavigate={handleNavigate} />;
+    }
+    if (path === '/refund' || path === '/refund-policy') {
+      return <RefundPolicyPage onNavigate={handleNavigate} />;
+    }
+    if (path === '/support' || path === '/maintenance' || path === '/status') {
+      return <MaintenanceSupportPage onNavigate={handleNavigate} />;
+    }
+    if (path === '/faq' || path === '/help' || path === '/docs') {
+      return <FaqPage onNavigate={handleNavigate} />;
+    }
+    if (path === '/404') {
+      return <NotFoundPage onNavigate={handleNavigate} />;
     }
 
-    // Auth routes
+    // 3. Unauthenticated User Routes & Auth Checks
     if (!user) {
       if (path === '/login') {
         return <LoginPage onLoginSuccess={handleLoginSuccess} onNavigate={handleNavigate} />;
@@ -96,16 +121,29 @@ export const App: React.FC = () => {
       if (path === '/reset-password') {
         return <ResetPasswordPage onNavigate={handleNavigate} />;
       }
-      // Default route for non-logged-in users: Landing Page
-      return <LandingPage onNavigate={handleNavigate} />;
+      if (path === '/') {
+        return <LandingPage onNavigate={handleNavigate} />;
+      }
+
+      // If non-authenticated user tries to access /draft/ or /project/ or /chats, prompt login
+      if (path.startsWith('/draft/') || path.startsWith('/project/') || path.startsWith('/chats') || path === '/groups') {
+        return <LoginPage onLoginSuccess={handleLoginSuccess} onNavigate={handleNavigate} />;
+      }
+
+      // Unknown route for unauthenticated user -> 404
+      return <NotFoundPage onNavigate={handleNavigate} />;
     }
 
-    // If a non-logged-in user tries to access a draft, redirect to login
+    // 4. Authenticated User Routes (user is logged in)
+    if (path === '/') {
+      return <Dashboard onNavigate={handleNavigate} onLogout={handleLogout} />;
+    }
+
     if (path.startsWith('/draft/')) {
-      return <LoginPage onLoginSuccess={handleLoginSuccess} onNavigate={handleNavigate} />;
+      const id = path.split('/draft/')[1];
+      return <DeliveryView projectId={id} onNavigate={handleNavigate} />;
     }
 
-    // Protected routes
     if (path.startsWith('/project/')) {
       const id = path.split('/project/')[1];
       return <ProjectEditor projectId={id} onNavigate={handleNavigate} />;
@@ -127,11 +165,16 @@ export const App: React.FC = () => {
       );
     }
 
-    // Default route for logged-in users
-    return <Dashboard onNavigate={handleNavigate} onLogout={handleLogout} />;
+    // Fallback for unknown path when logged in -> 404 Not Found
+    return <NotFoundPage onNavigate={handleNavigate} />;
   };
 
-  return <>{renderRoute()}</>;
+  return (
+    <ErrorBoundary>
+      {renderRoute()}
+      <CookieBanner onNavigate={handleNavigate} />
+    </ErrorBoundary>
+  );
 };
 
 export default App;

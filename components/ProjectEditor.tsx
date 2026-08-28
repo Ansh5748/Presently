@@ -5,8 +5,9 @@ import { fetchScreenshotAsBase64 } from '../services/screenshotService';
 import { refineText } from '../services/geminiService';
 import { SubscriptionModal } from './SubscriptionModal';
 import { AnnotationIssueModal } from './AnnotationIssueModal';
+import { LiveCaptureModal } from './LiveCaptureModal';
 import { Project, Pin, ProjectStatus, ProjectPage, AnnotationIssue } from '../types';
-import { ArrowLeft, Share2, Sparkles, X, MapPin, Eye, Loader2, Image as ImageIcon, Trash2, Layout, Link as LinkIcon, Pencil, Monitor, Smartphone, ChevronDown, ChevronUp, Laptop, Search, SlidersHorizontal, AlertCircle, MessageSquare } from 'lucide-react';
+import { ArrowLeft, Share2, Sparkles, X, MapPin, Eye, Loader2, Image as ImageIcon, Trash2, Layout, Link as LinkIcon, Pencil, Monitor, Smartphone, ChevronDown, ChevronUp, Laptop, Search, SlidersHorizontal, AlertCircle, MessageSquare, RefreshCw, Globe, CheckCircle, Info, Download } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
 
 const SPECIAL_EMAILS = [
@@ -14,8 +15,8 @@ const SPECIAL_EMAILS = [
   'divyanshgupta4949@gmail.com'
 ];
 
-// Helper: Force resize and compress using HTML Canvas (Guaranteed size reduction)
-const forceCompressWithCanvas = (base64: string, maxWidth = 1280, quality = 0.7): Promise<string> => {
+// Helper: Width-only resize and quality compression using HTML Canvas (Preserves full width & sharp text)
+const forceCompressWithCanvas = (base64: string, maxWidth = 1920, quality = 0.82): Promise<string> => {
   return new Promise((resolve) => {
     const img = new Image();
     img.src = base64;
@@ -24,7 +25,7 @@ const forceCompressWithCanvas = (base64: string, maxWidth = 1280, quality = 0.7)
       let width = img.width;
       let height = img.height;
 
-      // Calculate new dimensions
+      // ONLY scale down if width exceeds maxWidth (NEVER scale down width based on height)
       if (width > maxWidth) {
         height = Math.round((height * maxWidth) / width);
         width = maxWidth;
@@ -34,79 +35,74 @@ const forceCompressWithCanvas = (base64: string, maxWidth = 1280, quality = 0.7)
       canvas.height = height;
       const ctx = canvas.getContext('2d');
       if (!ctx) return resolve(base64);
-      
+
+      // High quality image smoothing for sharp text readability
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(img, 0, 0, width, height);
-      // Convert to JPEG (often smaller than PNG/WebP for photos)
+
+      // Try WebP first for ultra-lightweight high quality, fallback to JPEG 0.82
+      try {
+        const webpData = canvas.toDataURL('image/webp', quality);
+        if (webpData && webpData.startsWith('data:image/webp') && webpData.length > 1000) {
+          return resolve(webpData);
+        }
+      } catch (e) {}
+
       resolve(canvas.toDataURL('image/jpeg', quality));
     };
     img.onerror = () => {
-      // Return a 1x1 pixel if loading fails to prevent saving 6MB garbage strings
-      resolve('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=');
+      resolve(base64);
     };
   });
 };
 
+// Helper: Fast binary base64 to Blob conversion without fetch() network calls
+const base64ToBlob = (base64: string): Blob => {
+  try {
+    const parts = base64.split(';base64,');
+    const contentType = parts[0].split(':')[1] || 'image/jpeg';
+    const raw = window.atob(parts[1]);
+    const rawLength = raw.length;
+    const uInt8Array = new Uint8Array(rawLength);
+    for (let i = 0; i < rawLength; ++i) {
+      uInt8Array[i] = raw.charCodeAt(i);
+    }
+    return new Blob([uInt8Array], { type: contentType });
+  } catch (err) {
+    console.warn('[base64ToBlob] Conversion fallback:', err);
+    return new Blob([], { type: 'image/jpeg' });
+  }
+};
+
 /**
- * Compress base64 image to target size (200-500KB) using browser-image-compression
- * This replaces the backend compression for better performance on free-tier deployments
+ * Compress base64 image while strictly maintaining full image width so text remains 100% sharp and readable.
  */
 const compressImageBase64 = async (base64String: string): Promise<string> => {
   try {
-    // Check if it's a valid base64 image
     if (!base64String || !base64String.startsWith('data:image')) {
       return base64String;
     }
 
-    console.log('[Frontend Compression] Starting compression...');
     const startSize = (base64String.length * 3) / 4;
-    console.log(`[Frontend Compression] Original size: ${(startSize / 1024).toFixed(2)} KB`);
-
     const startSizeKB = startSize / 1024;
-    // 🚀 Do NOT compress very small images
-    if (startSizeKB <= 500) {
-      console.log('[Frontend Compression] Skipping compression (already under 500KB)');
+    console.log(`[Frontend Compression] Starting compression... Original size: ${startSizeKB.toFixed(2)} KB`);
+
+    // 🚀 Do NOT re-compress images already under 600KB
+    if (startSizeKB <= 600) {
+      console.log('[Frontend Compression] Skipping compression (already under 600KB)');
       return base64String;
     }
-    // Convert base64 to Blob
-    const response = await fetch(base64String);
-    const blob = await response.blob();
 
-    // Target: 300-500KB
-    const TARGET_SIZE_KB = 300; // Aim for middle of range
-    const MAX_SIZE_KB = 500;
-
-    // Compression options with progressive quality reduction
-    const options = {
-      maxSizeMB: TARGET_SIZE_KB / 1024, // Convert KB to MB
-      maxWidthOrHeight: 2560, // Limit max dimension
-      useWebWorker: true,
-      fileType: 'image/webp' as const,
-      initialQuality: 0.95
-    };
-
-    let compressedBlob = await imageCompression(blob as File, options);
-
-    // If browser-image-compression fails to reduce enough, or fails entirely
-    if (compressedBlob.size > MAX_SIZE_KB * 1024 || compressedBlob.size >= blob.size) {
-       console.log('[Frontend Compression] Library compression insufficient. Using Canvas fallback...');
-       return await forceCompressWithCanvas(base64String, 1280, 0.7);
-    }
-
-    // Convert compressed blob back to base64
-    const compressedBase64 = await new Promise<string>((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result as string);
-      reader.readAsDataURL(compressedBlob);
-    });
-
+    // Width-only canvas compression preserves full desktop layout width & text anti-aliasing
+    const compressedBase64 = await forceCompressWithCanvas(base64String, 1920, 0.82);
     const finalSize = (compressedBase64.length * 3) / 4;
     console.log(`[Frontend Compression] Final size: ${(finalSize / 1024).toFixed(2)} KB (${((1 - finalSize / startSize) * 100).toFixed(1)}% reduction)`);
 
     return compressedBase64;
   } catch (error) {
     console.error('[Frontend Compression] Failed:', error);
-    // Fallback to canvas if the library crashes
-    return await forceCompressWithCanvas(base64String, 1000, 0.6);
+    return base64String;
   }
 };
 
@@ -122,7 +118,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
   const [pins, setPins] = useState<Pin[]>([]);
   const [activePageId, setActivePageId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'desktop' | 'mobile'>('desktop');
-  
+
   const [selectedPinId, setSelectedPinId] = useState<string | null>(null);
   const [isEditingPin, setIsEditingPin] = useState(false);
   const [tempPin, setTempPin] = useState<Partial<Pin> | null>(null);
@@ -161,7 +157,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
   const [isLocalComputeEnabled, setIsLocalComputeEnabled] = useState(false);
   const [permissionLoading, setPermissionLoading] = useState(false);
   const [userEmail, setUserEmail] = useState('');
-  
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
 
@@ -403,7 +399,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
     try {
       const projectData = await ApiService.getProject(projectId);
       setProject(projectData);
-      
+
       if (projectData.pages.length > 0 && !activePageId) {
         setActivePageId(projectData.pages[0].id);
       }
@@ -439,7 +435,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
             const e = u?.email?.toLowerCase() || '';
             if (SPECIAL_EMAILS.includes(e)) return true;
             if (projectData.userId?.toString?.() === currentUserId.toString()) return true;
-          } catch {}
+          } catch { }
           return false;
         })();
         const canAssignOrQA = !!perm.canAssign || isQAOrTester;
@@ -515,14 +511,14 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
 
   const checkSubscriptionAccess = async () => {
     if (SPECIAL_EMAILS.includes(userEmail.toLowerCase())) return true;
-    
+
     try {
       const user = StorageService.getUser() as any;
       const response = await fetch(`${import.meta.env.VITE_API_URL}/subscription/status`, {
         headers: { 'Authorization': `Bearer ${user.accessToken}` }
       });
       const status = await response.json();
-      
+
       if (status.hasActiveSubscription) return true;
       if (status.pendingVerification) {
         setShowPendingModal(true);
@@ -533,7 +529,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         setShowSubscriptionModal(true);
         return false;
       }
-      
+
       setSubscriptionModalMode('subscribe');
       setShowSubscriptionModal(true);
       return false;
@@ -591,8 +587,8 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
     try {
       let savedPin: Pin;
       if (selectedPinId) {
-        savedPin = await ApiService.updatePin(selectedPinId, { 
-          title: tempPin.title, 
+        savedPin = await ApiService.updatePin(selectedPinId, {
+          title: tempPin.title,
           description: tempPin.description,
           type: targetType
         });
@@ -611,11 +607,11 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       if (targetType === 'issue' && project.mode === 'working') {
         try {
           await ApiService.savePinIssue(savedPin.id, { projectId: project.id, status: 'active' });
-        } catch {}
+        } catch { }
       } else if (targetType === 'comment') {
         try {
           await ApiService.deletePinIssue(savedPin.id);
-        } catch {}
+        } catch { }
       }
 
       const updatedPins = await ApiService.getPins(project.id);
@@ -703,7 +699,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         onNavigate('/login');
         return;
       }
-       alert('AI refinement failed');
+      alert('AI refinement failed');
     } finally {
       setAiLoading(false);
     }
@@ -711,13 +707,13 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
 
   const handlePublish = async () => {
     if (!project) return;
-    
+
     try {
       await ApiService.publishProject(project.id);
       const updatedProject = await ApiService.getProject(project.id);
       setProject(updatedProject);
-      alert(project.status !== ProjectStatus.PUBLISHED 
-        ? "Project published successfully!" 
+      alert(project.status !== ProjectStatus.PUBLISHED
+        ? "Project published successfully!"
         : "Live version has been updated with your latest changes."
       );
     } catch (error: any) {
@@ -777,48 +773,253 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       reader.onloadend = () => resolve(reader.result as string);
       reader.readAsDataURL(blob);
     });
-    
+
     // Compress the screenshot on the frontend before sending to backend
     console.log('[Screenshot] Compressing image on frontend...');
     const compressed = await compressImageBase64(base64);
     return compressed;
   };
 
+  const [liveCaptureModalConfig, setLiveCaptureModalConfig] = useState<{
+    isOpen: boolean;
+    url: string;
+    device: 'desktop' | 'mobile';
+    isEditingPage?: boolean;
+    isMobileViewSwitch?: boolean;
+    isDesktopViewSwitch?: boolean;
+    autoSwitchMobileAfterAdd?: boolean;
+  }>({
+    isOpen: false,
+    url: '',
+    device: 'desktop',
+    isEditingPage: false,
+    isMobileViewSwitch: false,
+    isDesktopViewSwitch: false,
+    autoSwitchMobileAfterAdd: false
+  });
+
+  const [urlModalConfig, setUrlModalConfig] = useState<{
+    isOpen: boolean;
+    mode: 'add' | 'edit';
+    pageId?: string;
+    initialUrl: string;
+    initialName: string;
+  }>({
+    isOpen: false,
+    mode: 'add',
+    initialUrl: '',
+    initialName: ''
+  });
+
+  const [inputUrl, setInputUrl] = useState('');
+  const [inputName, setInputName] = useState('');
+
   const handleAddFromUrl = async () => {
     if (!checkPermission()) return;
     if (!(await checkSubscriptionAccess())) return;
 
-    const url = prompt("Enter the URL of the page you want to capture:");
-    if (!url || !project) return;
+    const defaultUrl = project?.websiteUrl || '';
+    setInputUrl(defaultUrl);
+    setInputName('');
+    setUrlModalConfig({
+      isOpen: true,
+      mode: 'add',
+      initialUrl: defaultUrl,
+      initialName: ''
+    });
+  };
 
-    setIsFetchingUrl(true);
-    const interval = simulateLoadingSteps();
+  const handleOpenEditPageModal = async (e: React.MouseEvent, page: ProjectPage) => {
+    e.preventDefault();
+    e.stopPropagation();
 
+    if (!checkPermission()) return;
+    if (!(await checkSubscriptionAccess())) return;
+
+    setActivePageId(page.id);
+    const targetUrl = page.originalUrl || project?.websiteUrl || '';
+    setInputUrl(targetUrl);
+    setInputName(''); // Empty page name field on edit modal open as requested
+    setUrlModalConfig({
+      isOpen: true,
+      mode: 'edit',
+      pageId: page.id,
+      initialUrl: targetUrl,
+      initialName: page.name || ''
+    });
+  };
+
+  const [toast, setToast] = useState<{
+    show: boolean;
+    message: string;
+    type?: 'success' | 'error' | 'info';
+  }>({ show: false, message: '', type: 'info' });
+
+  const [deletePageConfirmId, setDeletePageConfirmId] = useState<string | null>(null);
+
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setToast({ show: true, message, type });
+    setTimeout(() => {
+      setToast({ show: false, message: '', type: 'info' });
+    }, 4000);
+  };
+
+  const handleConfirmUrlModal = async () => {
+    if (!inputUrl || !inputUrl.trim()) {
+      showToast("Please enter a valid webpage URL.", 'error');
+      return;
+    }
+
+    const targetUrl = inputUrl.trim();
+    const targetName = inputName.trim();
+    const isUrlUnchanged = targetUrl.toLowerCase() === urlModalConfig.initialUrl.trim().toLowerCase();
+
+    // Close URL modal
+    setUrlModalConfig(prev => ({ ...prev, isOpen: false }));
+
+    // IF EDITING EXISTING PAGE AND URL WAS NOT CHANGED: UPDATE NAME ONLY (DO NOT CALL SCREENSHOT OR LIVECAPTUREMODAL!)
+    if (urlModalConfig.mode === 'edit' && urlModalConfig.pageId && isUrlUnchanged) {
+      if (targetName && targetName !== urlModalConfig.initialName && project) {
+        try {
+          await ApiService.updatePage(project.id, urlModalConfig.pageId, { name: targetName });
+          const updatedProject = await ApiService.getProject(project.id);
+          setProject(updatedProject);
+          showToast("Page name updated successfully", 'success');
+        } catch (err) {
+          console.error("Failed to update page name:", err);
+          showToast("Failed to update page name.", 'error');
+        }
+      }
+      return;
+    }
+
+    // IF ADDING PAGE FROM MOBILE MODE: RUN DESKTOP CAPTURE FIRST TO CREATE PAGE, THEN AUTO-SWITCH TO MOBILE
+    const isAddingFromMobile = urlModalConfig.mode === 'add' && viewMode === 'mobile';
+
+    // IF URL WAS CHANGED OR ADDING NEW PAGE: LAUNCH LIVECAPTUREMODAL
+    setLiveCaptureModalConfig({
+      isOpen: true,
+      url: targetUrl,
+      device: isAddingFromMobile ? 'desktop' : viewMode,
+      isEditingPage: urlModalConfig.mode === 'edit',
+      autoSwitchMobileAfterAdd: isAddingFromMobile
+    });
+  };
+
+  const handleLiveCaptureAddPage = async (rawScreenshotBase64: string) => {
+    if (!project || !liveCaptureModalConfig.url) return;
     try {
-      const screenshotBase64 = await fetchDeviceScreenshot(url, 'desktop');
-      const name = normalizePageName(url, project.websiteUrl);
-      
-      const newPage = await ApiService.addPage(project.id, {
+      // Compress the screenshot before updating or adding page
+      const screenshotBase64 = await compressImageBase64(rawScreenshotBase64);
+
+      // IF RE-CAPTURING / EDITING EXISTING PAGE SCREENSHOT (DESKTOP OR MOBILE):
+      if (activePageId && liveCaptureModalConfig.isEditingPage) {
+        const pageName = inputName.trim() !== ''
+          ? inputName.trim()
+          : normalizePageName(liveCaptureModalConfig.url, project.websiteUrl);
+
+        const updateData: any = {
+          name: pageName,
+          originalUrl: liveCaptureModalConfig.url,
+          deleteAllPins: true, // Delete all existing pins on this page
+          mobileImageUrl: null // Reset mobile image so switching to Android will re-capture new URL
+        };
+
+        if (liveCaptureModalConfig.device === 'mobile') {
+          updateData.mobileImageUrl = screenshotBase64;
+          updateData.imageUrl = null;
+        } else {
+          updateData.imageUrl = screenshotBase64;
+        }
+
+        await ApiService.updatePage(project.id, activePageId, updateData);
+        const updatedProject = await ApiService.getProject(project.id);
+        setProject(updatedProject);
+
+        const updatedPins = await ApiService.getPins(project.id);
+        setPins(updatedPins);
+
+        showToast("Screen captured successfully", 'success');
+        setLiveCaptureModalConfig({ isOpen: false, url: '', device: 'desktop', isEditingPage: false });
+        return;
+      }
+
+      // IF SWITCHING VIEW MODE TO MOBILE FOR AN EXISTING PAGE: SAVE TO SAME PAGE
+      if (liveCaptureModalConfig.isMobileViewSwitch && activePageId) {
+        await ApiService.updatePage(project.id, activePageId, {
+          mobileImageUrl: screenshotBase64
+        } as any);
+
+        setProject(prev => prev ? {
+          ...prev,
+          pages: prev.pages.map(p => p.id === activePageId ? { ...p, mobileImageUrl: screenshotBase64 } : p)
+        } : null);
+
+        setViewMode('mobile');
+        showToast("Mobile view captured successfully", 'success');
+        setLiveCaptureModalConfig({ isOpen: false, url: '', device: 'desktop', isEditingPage: false, isMobileViewSwitch: false });
+        return;
+      }
+
+      // IF SWITCHING VIEW MODE TO DESKTOP FOR AN EXISTING PAGE: SAVE TO SAME PAGE
+      if (liveCaptureModalConfig.isDesktopViewSwitch && activePageId) {
+        await ApiService.updatePage(project.id, activePageId, {
+          imageUrl: screenshotBase64
+        } as any);
+
+        setProject(prev => prev ? {
+          ...prev,
+          pages: prev.pages.map(p => p.id === activePageId ? { ...p, imageUrl: screenshotBase64 } : p)
+        } : null);
+
+        setViewMode('desktop');
+        showToast("Desktop view captured successfully", 'success');
+        setLiveCaptureModalConfig({ isOpen: false, url: '', device: 'desktop', isEditingPage: false, isDesktopViewSwitch: false });
+        return;
+      }
+
+      // ADD NEW PAGE:
+      const name = inputName.trim() !== ''
+        ? inputName.trim()
+        : normalizePageName(liveCaptureModalConfig.url, project.websiteUrl);
+
+      const newPageData: any = {
         name,
+        originalUrl: liveCaptureModalConfig.url,
         imageUrl: screenshotBase64,
-        originalUrl: url
-      });
-      
+        mobileImageUrl: null
+      };
+
+      const newPage = await ApiService.addPage(project.id, newPageData);
       const updatedProject = await ApiService.getProject(project.id);
       setProject(updatedProject);
       setActivePageId(newPage.id);
+
+      // IF ADDING PAGE WHILE IN MOBILE MODE: NOW AUTO-SWITCH TO MOBILE & TRIGGER MOBILE CAPTURE!
+      if (liveCaptureModalConfig.autoSwitchMobileAfterAdd) {
+        showToast("Page created. Now capturing Android mobile view...", 'info');
+        setLiveCaptureModalConfig({
+          isOpen: true,
+          url: liveCaptureModalConfig.url,
+          device: 'mobile',
+          isEditingPage: false,
+          isMobileViewSwitch: true,
+          autoSwitchMobileAfterAdd: false
+        });
+        return;
+      }
+
+      showToast("New page added successfully", 'success');
+      setLiveCaptureModalConfig({ isOpen: false, url: '', device: 'desktop', isEditingPage: false, autoSwitchMobileAfterAdd: false });
     } catch (error: any) {
       if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
         StorageService.clearUser();
-        alert("Session expired. Please log in again.");
+        showToast("Session expired. Please log in again.", 'error');
         onNavigate('/login');
         return;
       }
-      alert("Failed to capture screenshot. Please check the URL and ensure the screenshot service is running.");
-    } finally {
-      setIsFetchingUrl(false);
-      setLoadingStep('');
-      clearInterval(interval);
+      showToast("Failed to save live screenshot.", 'error');
+      setLiveCaptureModalConfig({ isOpen: false, url: '', device: 'desktop', isEditingPage: false, autoSwitchMobileAfterAdd: false });
     }
   };
 
@@ -831,200 +1032,119 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
 
       const file = e.target.files[0];
       const reader = new FileReader();
-      
+
       reader.onloadend = async () => {
         try {
           const base64String = reader.result as string;
           const name = file.name.split('.')[0].replace(/-|_/g, ' ');
-          
+
           // Compress the uploaded image before sending to backend
           console.log('[Upload] Compressing uploaded image...');
           const compressedImage = await compressImageBase64(base64String);
-          
+
           const newPage = await ApiService.addPage(project.id, {
             name,
             imageUrl: compressedImage
           });
-          
+
           const updatedProject = await ApiService.getProject(project.id);
           setProject(updatedProject);
           setActivePageId(newPage.id);
+          showToast("Image uploaded successfully", 'success');
         } catch (error: any) {
           if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
             StorageService.clearUser();
             onNavigate('/login');
             return;
           }
-          alert('Failed to upload image');
+          showToast('Failed to upload image', 'error');
         }
       };
-      
+
       reader.readAsDataURL(file);
     }
-    
+
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
   };
 
   const handleRenamePage = async (e: React.MouseEvent, page: ProjectPage) => {
-    e.stopPropagation();
-    e.preventDefault();
-
-    if (!project) return;
-
-    if (page.originalUrl) {
-      if (!checkPermission()) return;
-      if (!(await checkSubscriptionAccess())) return;
-
-      const originalUrl = page.originalUrl;
-      const newUrlInput = prompt("Enter the new URL for this page:", originalUrl);
-      if (newUrlInput === null) return;
-      
-      const finalUrl = newUrlInput.trim();
-      if (!finalUrl) {
-        alert("URL cannot be empty.");
-        return;
-      }
-
-      const newNameInput = prompt("Enter a new name for this page (leave blank to auto-generate from URL):", page.name);
-      if (newNameInput === null) return;
-
-      const finalName = newNameInput.trim() === '' 
-        ? normalizePageName(finalUrl, project.websiteUrl) 
-        : newNameInput.trim();
-
-      setIsFetchingUrl(true);
-      const interval = simulateLoadingSteps();
-
-      try {
-        const newScreenshotBase64 = await fetchDeviceScreenshot(finalUrl, 'desktop');
-        
-        await ApiService.updatePage(project.id, page.id, {
-          name: finalName,
-          imageUrl: newScreenshotBase64,
-          originalUrl: finalUrl,
-          deleteAllPins: true,
-          mobileImageUrl: null // Clear mobile image so it re-fetches on next view
-        });
-        
-        const updatedProject = await ApiService.getProject(project.id);
-        setProject(updatedProject);
-
-        const updatedPins = await ApiService.getPins(project.id);
-        setPins(updatedPins);
-      } catch (error: any) {
-        if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
-          StorageService.clearUser();
-          alert("Session expired. Please log in again.");
-          onNavigate('/login');
-          return;
-        }
-        alert("Failed to update screenshot. Please check the URL and ensure the screenshot service is running.");
-      } finally {
-        setIsFetchingUrl(false);
-        setLoadingStep('');
-        clearInterval(interval);
-      }
-    } else {
-      const newNameInput = prompt("Enter a new name for this page:", page.name);
-      if (newNameInput === null || newNameInput.trim() === '') return;
-      
-      const finalName = newNameInput.trim();
-
-      try {
-        await ApiService.updatePage(project.id, page.id, { name: finalName });
-        const updatedProject = await ApiService.getProject(project.id);
-        setProject(updatedProject);
-      } catch (error: any) {
-        if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
-          StorageService.clearUser();
-          onNavigate('/login');
-          return;
-        }
-        alert('Failed to rename page');
-      }
-    }
+    handleOpenEditPageModal(e, page);
   };
 
   const handleDeletePage = async (e: React.MouseEvent, pageId: string) => {
     e.preventDefault();
     e.stopPropagation();
-    
+
     if (!project) return;
-    
+
     if (project.pages.length <= 1) {
-      alert("A project must have at least one page.");
+      showToast("A project must have at least one page.", 'error');
       return;
     }
 
-    if (confirm("Delete this page? All pins on this page will be removed.")) {
-      try {
-        await ApiService.deletePage(project.id, pageId);
-        
-        const updatedProject = await ApiService.getProject(project.id);
-        setProject(updatedProject);
-        
-        if (activePageId === pageId) {
-          setActivePageId(updatedProject.pages[0]?.id || null);
-        }
-        
-        const updatedPins = await ApiService.getPins(project.id);
-        setPins(updatedPins);
-      } catch (error: any) {
-        if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
-          StorageService.clearUser();
-          onNavigate('/login');
-          return;
-        }
-        alert('Failed to delete page');
+    setDeletePageConfirmId(pageId);
+  };
+
+  const confirmDeletePage = async () => {
+    if (!project || !deletePageConfirmId) return;
+    const pageId = deletePageConfirmId;
+    setDeletePageConfirmId(null);
+
+    try {
+      await ApiService.deletePage(project.id, pageId);
+
+      const updatedProject = await ApiService.getProject(project.id);
+      setProject(updatedProject);
+
+      if (activePageId === pageId) {
+        setActivePageId(updatedProject.pages[0]?.id || null);
       }
+
+      const updatedPins = await ApiService.getPins(project.id);
+      setPins(updatedPins);
+      showToast("Page deleted successfully", 'success');
+    } catch (error: any) {
+      if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
+        StorageService.clearUser();
+        onNavigate('/login');
+        return;
+      }
+      showToast('Failed to delete page', 'error');
     }
   };
 
   const handleViewModeChange = async (mode: 'desktop' | 'mobile') => {
     if (mode === 'mobile' && activePage && activePage.originalUrl && !(activePage as any).mobileImageUrl) {
       if (!checkPermission()) return;
+      if (!(await checkSubscriptionAccess())) return;
+
+      // Pop up LiveCaptureModal in Android format!
+      setLiveCaptureModalConfig({
+        isOpen: true,
+        url: activePage.originalUrl,
+        device: 'mobile',
+        isMobileViewSwitch: true
+      });
+      return;
     }
-    if (mode === 'mobile' && activePage && activePage.originalUrl && !(activePage as any).mobileImageUrl && !(await checkSubscriptionAccess())) return;
+
+    if (mode === 'desktop' && activePage && activePage.originalUrl && !activePage.imageUrl) {
+      if (!checkPermission()) return;
+      if (!(await checkSubscriptionAccess())) return;
+
+      // Pop up LiveCaptureModal in Desktop format!
+      setLiveCaptureModalConfig({
+        isOpen: true,
+        url: activePage.originalUrl,
+        device: 'desktop',
+        isDesktopViewSwitch: true
+      });
+      return;
+    }
 
     setViewMode(mode);
-    
-    // If switching to mobile and we don't have the mobile screenshot yet, fetch it
-    if (mode === 'mobile' && activePage && activePage.originalUrl && !(activePage as any).mobileImageUrl) {
-      setIsFetchingUrl(true);
-      setIsFetchingMobile(true);
-      const interval = simulateLoadingSteps();
-      
-      try {
-        const mobileScreenshot = await fetchDeviceScreenshot(activePage.originalUrl, 'mobile');
-        
-        // Save the mobile screenshot to the page
-        await ApiService.updatePage(project!.id, activePage.id, {
-          mobileImageUrl: mobileScreenshot
-        } as any);
-        
-        // Update local state immediately to show the image
-        setProject(prev => prev ? {
-          ...prev,
-          pages: prev.pages.map(p => p.id === activePage.id ? { ...p, mobileImageUrl: mobileScreenshot } : p)
-        } : null);
-
-      } catch (error: any) {
-        if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
-          StorageService.clearUser();
-          onNavigate('/login');
-          return;
-        }
-        alert("Failed to capture mobile screenshot.");
-        setViewMode('desktop'); // Revert on failure
-      } finally {
-        setIsFetchingUrl(false);
-        setIsFetchingMobile(false);
-        setLoadingStep('');
-        clearInterval(interval);
-      }
-    }
   };
 
   if (loading || !project) return (
@@ -1055,7 +1175,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
                 setShowSearchDrawer(prev => !prev);
                 refreshProjectIssues();
                 if (project) {
-                  ApiService.getPins(project.id).then(setPins).catch(() => {});
+                  ApiService.getPins(project.id).then(setPins).catch(() => { });
                 }
               }}
               className={`p-2 rounded-lg border transition flex items-center gap-1.5 text-xs font-medium ${showSearchDrawer ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border-slate-200'}`}
@@ -1104,7 +1224,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
             </button>
           )}
 
-          <button 
+          <button
             onClick={handlePublish}
             className="flex items-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
           >
@@ -1155,11 +1275,10 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
                       key={v}
                       type="button"
                       onClick={() => setIssueDeviceFilter(v)}
-                      className={`py-1 rounded text-[10px] font-medium transition ${
-                        issueDeviceFilter === v
-                          ? 'bg-white shadow text-indigo-600'
-                          : 'text-slate-500 hover:text-slate-700'
-                      }`}
+                      className={`py-1 rounded text-[10px] font-medium transition ${issueDeviceFilter === v
+                        ? 'bg-white shadow text-indigo-600'
+                        : 'text-slate-500 hover:text-slate-700'
+                        }`}
                     >
                       {v === 'all' ? 'All' : v === 'desktop' ? <Monitor size={12} className="inline" /> : <Smartphone size={12} className="inline" />}
                       {v !== 'all' ? ` ${v.charAt(0).toUpperCase()}${v.slice(1)}` : ''}
@@ -1176,11 +1295,10 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
                       key={v}
                       type="button"
                       onClick={() => setIssueTypeFilter(v)}
-                      className={`py-1 rounded text-[10px] font-medium transition ${
-                        issueTypeFilter === v
-                          ? 'bg-white shadow text-indigo-600'
-                          : 'text-slate-500 hover:text-slate-700'
-                      }`}
+                      className={`py-1 rounded text-[10px] font-medium transition ${issueTypeFilter === v
+                        ? 'bg-white shadow text-indigo-600'
+                        : 'text-slate-500 hover:text-slate-700'
+                        }`}
                     >
                       {v === 'all' ? 'All' : v === 'issue' ? <AlertCircle size={12} className="inline" /> : <MessageSquare size={12} className="inline" />}
                       {v !== 'all' ? ` ${v.charAt(0).toUpperCase()}${v.slice(1)}` : ''}
@@ -1278,12 +1396,11 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
                   : 'Comment';
 
                 const statusBadge = isIssue && iss ? (
-                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium flex-shrink-0 ${
-                    iss.status === 'active' ? 'bg-blue-50 text-blue-700' :
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium flex-shrink-0 ${iss.status === 'active' ? 'bg-blue-50 text-blue-700' :
                     iss.status === 'in_progress' ? 'bg-orange-50 text-orange-700' :
-                    iss.status === 'in_review' ? 'bg-purple-50 text-purple-700' :
-                    'bg-emerald-50 text-emerald-700'
-                  }`}>
+                      iss.status === 'in_review' ? 'bg-purple-50 text-purple-700' :
+                        'bg-emerald-50 text-emerald-700'
+                    }`}>
                     {iss.status.replace('_', ' ')}
                   </span>
                 ) : (
@@ -1387,7 +1504,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
               <p className="text-slate-600 mb-6">
                 We are verifying your payment. Once done, we will activate your plan.
               </p>
-              <button 
+              <button
                 onClick={() => setShowPendingModal(false)}
                 className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 py-2.5 rounded-lg font-medium transition-colors"
               >
@@ -1406,7 +1523,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
             setIssueModalPin(null);
             refreshProjectIssues(project.id);
             if (project) {
-              ApiService.getPins(project.id).then(setPins).catch(() => {});
+              ApiService.getPins(project.id).then(setPins).catch(() => { });
             }
           }}
           pin={issueModalPin}
@@ -1420,14 +1537,14 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
             }
             refreshProjectIssues(project.id);
             if (project) {
-              ApiService.getPins(project.id).then(setPins).catch(() => {});
+              ApiService.getPins(project.id).then(setPins).catch(() => { });
             }
           }}
           onDeletePin={(pinId) => {
             setPins(prev => prev.filter(pin => pin.id !== pinId));
             refreshProjectIssues(project.id);
             if (project) {
-              ApiService.getPins(project.id).then(setPins).catch(() => {});
+              ApiService.getPins(project.id).then(setPins).catch(() => { });
             }
           }}
         />
@@ -1450,38 +1567,50 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         />
       )}
 
-      {/* Permission Modal */}
+      {/* Chrome Extension Requirement Modal */}
       {showPermissionModal && (
         <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md animate-in fade-in zoom-in-95 duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md animate-in fade-in zoom-in-95 duration-200 border border-slate-200">
             <div className="flex flex-col items-center text-center">
-              <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mb-4 text-blue-600">
-                <Laptop size={24} />
+              <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center mb-4 text-blue-600 border border-blue-100 shadow-sm">
+                <Globe size={24} />
               </div>
-              <h2 className="text-xl font-bold text-slate-900 mb-2">Enable Local Compute</h2>
-              <p className="text-slate-600 text-sm mb-6 leading-relaxed">
-                To ensure the best performance and avoid server overload, we need your permission to use your local browser resources for processing screenshots.
+              <h2 className="text-xl font-bold text-slate-900 mb-2">Install Chrome Extension</h2>
+              <p className="text-slate-600 text-sm mb-4 leading-relaxed">
+                To capture real-time, unblocked full-page website screenshots, please ensure the <strong className="text-slate-900 font-semibold">Presently Live Capture Chrome Extension</strong> is installed and enabled.
               </p>
-              
-              <div className="flex flex-col gap-3 w-full">
-                <button 
+
+              <div className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3.5 mb-5 text-left text-xs space-y-2">
+                <div className="flex items-center gap-2 text-slate-700 font-medium">
+                  <CheckCircle size={14} className="text-emerald-500 flex-shrink-0" />
+                  <span>Real-time Desktop & Mobile Scanner</span>
+                </div>
+                <div className="flex items-center gap-2 text-slate-700 font-medium">
+                  <CheckCircle size={14} className="text-emerald-500 flex-shrink-0" />
+                  <span>Bypasses server blocks & bot detection</span>
+                </div>
+                <div className="flex items-center gap-2 text-slate-700 font-medium">
+                  <CheckCircle size={14} className="text-emerald-500 flex-shrink-0" />
+                  <span>Client-side compressed instant saving</span>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2.5 w-full">
+                <button
                   onClick={handleGrantPermission}
                   disabled={permissionLoading}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-sm active:scale-98"
                 >
-                  {permissionLoading ? <Loader2 size={18} className="animate-spin" /> : null}
-                  Allow & Continue
+                  {permissionLoading ? <Loader2 size={16} className="animate-spin" /> : <Globe size={16} />}
+                  Enable Live Capture & Continue
                 </button>
-                <button 
+                <button
                   onClick={() => setShowPermissionModal(false)}
-                  className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 py-3 rounded-lg font-medium transition-colors"
+                  className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 py-2.5 rounded-xl font-semibold text-xs transition-colors"
                 >
-                  Cancel
+                  Skip for Now
                 </button>
               </div>
-              <p className="text-xs text-slate-400 mt-4">
-                You only need to do this once.
-              </p>
             </div>
           </div>
         </div>
@@ -1490,7 +1619,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
         <div className="w-full md:w-64 bg-white border-b md:border-r md:border-b-0 border-slate-200 flex flex-col z-30 relative">
           <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-white z-20">
-            <button 
+            <button
               onClick={() => setShowMobileScreens(!showMobileScreens)}
               className="font-bold text-slate-700 flex items-center gap-2 text-sm md:cursor-default"
             >
@@ -1500,23 +1629,23 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
                 {showMobileScreens ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
               </span>
             </button>
-            
+
             <div className="flex items-center gap-1">
-              <input 
-                type="file" 
-                accept="image/*" 
-                className="hidden" 
-                ref={fileInputRef} 
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                ref={fileInputRef}
                 onChange={handleFileChange}
               />
-              <button 
+              <button
                 onClick={handleAddFromUrl}
                 className="text-slate-500 hover:text-blue-600 hover:bg-blue-50 p-1.5 rounded-md transition-colors"
                 title="Add Page from Link"
               >
                 <LinkIcon size={16} />
               </button>
-              <button 
+              <button
                 onClick={handleUploadClick}
                 className="text-slate-500 hover:text-blue-600 hover:bg-blue-50 p-1.5 rounded-md transition-colors"
                 title="Upload Image"
@@ -1525,7 +1654,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
               </button>
             </div>
           </div>
-          
+
           <div className={`
             md:flex-1 md:static md:block md:bg-transparent md:shadow-none md:w-auto md:max-h-none md:overflow-y-auto p-3 transition-all duration-200
             ${showMobileScreens ? 'absolute top-full left-0 w-full bg-white shadow-xl overflow-x-auto border-b border-slate-200' : 'hidden'}
@@ -1540,49 +1669,48 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
               </div>
             )}
             <div className="flex flex-row md:flex-col space-x-3 md:space-x-0 md:space-y-3">
-            {project.pages.map((page) => (
-              <div 
-                key={page.id}
-                onClick={() => setActivePageId(page.id)}
-                className={`group relative p-2 rounded-lg cursor-pointer border-2 transition-all ${
-                  activePageId === page.id ? 'border-blue-500 bg-blue-50/50' : 'border-transparent hover:bg-slate-50'
-                }`}
-                style={{ minWidth: '150px' }}
-              >
-                <div className="aspect-video bg-slate-200 rounded-md overflow-hidden mb-2 relative group-hover:shadow-sm">
-                  {page.imageUrl ? (
-                    <img src={page.imageUrl} alt={page.name} className="w-full h-full object-cover object-top" />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center bg-slate-100">
-                      <div className="text-xs text-slate-500 flex items-center gap-2">
-                        <Loader2 size={14} className="animate-spin" /> Loading...
+              {project.pages.map((page) => (
+                <div
+                  key={page.id}
+                  onClick={() => setActivePageId(page.id)}
+                  className={`group relative p-2 rounded-lg cursor-pointer border-2 transition-all ${activePageId === page.id ? 'border-blue-500 bg-blue-50/50' : 'border-transparent hover:bg-slate-50'
+                    }`}
+                  style={{ minWidth: '150px' }}
+                >
+                  <div className="aspect-video bg-slate-200 rounded-md overflow-hidden mb-2 relative group-hover:shadow-sm">
+                    {page.imageUrl ? (
+                      <img src={page.imageUrl} alt={page.name} className="w-full h-full object-cover object-top" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center bg-slate-100">
+                        <div className="text-xs text-slate-500 flex items-center gap-2">
+                          <Loader2 size={14} className="animate-spin" /> Loading...
+                        </div>
                       </div>
+                    )}
+                    <div className="absolute top-0 right-0 p-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-gradient-to-l from-black/20 to-transparent w-full justify-end">
+                      <button
+                        onClick={(e) => handleOpenEditPageModal(e, page)}
+                        className="bg-white p-1.5 rounded-md text-slate-500 hover:text-blue-600 hover:bg-blue-50 transition-colors shadow-sm"
+                        title="Edit Page URL or Name"
+                      >
+                        <Pencil size={12} />
+                      </button>
+                      <button
+                        onClick={(e) => handleDeletePage(e, page.id)}
+                        className="bg-white p-1.5 rounded-md text-slate-500 hover:text-red-500 hover:bg-red-50 transition-colors shadow-sm"
+                        title="Delete"
+                      >
+                        <Trash2 size={12} />
+                      </button>
                     </div>
-                  )}
-                  <div className="absolute top-0 right-0 p-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-gradient-to-l from-black/20 to-transparent w-full justify-end">
-                    <button 
-                      onClick={(e) => handleRenamePage(e, page)}
-                      className="bg-white p-1.5 rounded-md text-slate-500 hover:text-blue-600 hover:bg-blue-50 transition-colors shadow-sm"
-                      title="Rename"
-                    >
-                      <Pencil size={12} />
-                    </button>
-                    <button 
-                      onClick={(e) => handleDeletePage(e, page.id)}
-                      className="bg-white p-1.5 rounded-md text-slate-500 hover:text-red-500 hover:bg-red-50 transition-colors shadow-sm"
-                      title="Delete"
-                    >
-                      <Trash2 size={12} />
-                    </button>
+                  </div>
+                  <div className="flex justify-between items-center px-1">
+                    <span className={`text-xs font-medium truncate ${activePageId === page.id ? 'text-blue-700' : 'text-slate-600'}`}>
+                      {page.name}
+                    </span>
                   </div>
                 </div>
-                <div className="flex justify-between items-center px-1">
-                  <span className={`text-xs font-medium truncate ${activePageId === page.id ? 'text-blue-700' : 'text-slate-600'}`}>
-                    {page.name}
-                  </span>
-                </div>
-              </div>
-            ))}
+              ))}
             </div>
           </div>
         </div>
@@ -1590,73 +1718,72 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         <main ref={mainScrollRef} className="flex-1 overflow-auto p-4 md:p-8 relative flex justify-center bg-slate-100/50">
           {activePage ? (
             <div className={`transition-all duration-300 ${viewMode === 'mobile' ? 'w-[375px] h-[667px] overflow-y-auto border-4 border-slate-800 rounded-[2rem] shadow-2xl bg-slate-800 scrollbar-hide' : 'w-full max-w-[1000px]'}`}>
-            <div 
-              className="relative bg-white shadow-xl rounded-lg overflow-hidden select-none border border-slate-200 transition-all duration-300 flex flex-col"
-              style={{ width: '100%', cursor: 'crosshair', minHeight: viewMode === 'mobile' ? 'unset' : '600px', height: 'fit-content' }}
-              onClick={handleImageClick}
-            >
-              {/* {activePage.imageUrl ? ( */}
-              {viewMode === 'mobile' && isFetchingMobile ? (
-                <div className="flex flex-col items-center justify-center h-[600px] bg-slate-50 text-slate-400">
-                  <Loader2 size={32} className="animate-spin mb-4 text-blue-500" />
-                  <p className="font-medium text-slate-600">Generating Mobile View...</p>
-                  <p className="text-xs mt-2 text-slate-400 max-w-[200px] text-center">{loadingStep}</p>
-                </div>
-              ) : activePage.imageUrl ? (
-                <>
-                  <img 
-                    ref={imageRef}
-                    src={viewMode === 'mobile' ? ((activePage as any).mobileImageUrl || activePage.imageUrl) : activePage.imageUrl} 
-                    alt={activePage.name} 
-                    className="w-full h-auto block"
-                    draggable={false}
-                  />
-      
-                  {activePins.filter(canSeePin).map((pin) => (
-                    <div
-                      key={pin.id}
-                      data-pin-id={pin.id}
-                      className="absolute transform -translate-x-1/2 -translate-y-1/2 group z-10"
-                      style={{ left: `${pin.x}%`, top: `${pin.y}%` }}
-                      onClick={(e) => handleEditPin(pin, e)}
-                    >
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-white shadow-lg cursor-pointer transition-transform hover:scale-110 border-2 border-white ${
-                        selectedPinId === pin.id ? 'bg-blue-600 scale-110 ring-4 ring-blue-600/20' : (pin.type && pin.type !== 'issue' ? 'bg-slate-600' : 'bg-slate-900')
-                      }`}>
-                        {pin.number}
-                      </div>
-                      {selectedPinId !== pin.id && (
-                        <div className="absolute left-10 top-0 bg-slate-900 text-white text-xs px-3 py-2 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity w-48 pointer-events-none z-20">
-                          <div className="flex items-center gap-1 mb-0.5">
-                            {(pin.type || 'issue') === 'issue' ? (
-                              <AlertCircle className="w-3 h-3 text-red-400" />
-                            ) : (
-                              <MessageSquare className="w-3 h-3 text-blue-300" />
-                            )}
-                            <span className="font-bold">{pin.title}</span>
-                          </div>
-                          <span className="text-slate-300 line-clamp-2">{pin.description}</span>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-      
-                  {tempPin && !selectedPinId && (
-                    <div 
-                      className="absolute w-8 h-8 rounded-full bg-blue-500 opacity-50 transform -translate-x-1/2 -translate-y-1/2 border-2 border-white shadow-sm"
-                      style={{ left: `${tempPin.x}%`, top: `${tempPin.y}%` }}
-                    />
-                  )}
-                </>
-              ) : (
-                <div className="flex-1 flex items-center justify-center">
-                  <div className="text-lg text-slate-500 flex items-center gap-3">
-                    <Loader2 size={24} className="animate-spin" />
-                    Generating new screenshot...
+              <div
+                className="relative bg-white shadow-xl rounded-lg overflow-hidden select-none border border-slate-200 transition-all duration-300 flex flex-col"
+                style={{ width: '100%', cursor: 'crosshair', minHeight: viewMode === 'mobile' ? 'unset' : '600px', height: 'fit-content' }}
+                onClick={handleImageClick}
+              >
+                {/* {activePage.imageUrl ? ( */}
+                {viewMode === 'mobile' && isFetchingMobile ? (
+                  <div className="flex flex-col items-center justify-center h-[600px] bg-slate-50 text-slate-400">
+                    <Loader2 size={32} className="animate-spin mb-4 text-blue-500" />
+                    <p className="font-medium text-slate-600">Generating Mobile View...</p>
+                    <p className="text-xs mt-2 text-slate-400 max-w-[200px] text-center">{loadingStep}</p>
                   </div>
-                </div>
-              )}
-            </div>
+                ) : activePage.imageUrl ? (
+                  <>
+                    <img
+                      ref={imageRef}
+                      src={viewMode === 'mobile' ? ((activePage as any).mobileImageUrl || activePage.imageUrl) : activePage.imageUrl}
+                      alt={activePage.name}
+                      className="w-full h-auto block"
+                      draggable={false}
+                    />
+
+                    {activePins.filter(canSeePin).map((pin) => (
+                      <div
+                        key={pin.id}
+                        data-pin-id={pin.id}
+                        className="absolute transform -translate-x-1/2 -translate-y-1/2 group z-10"
+                        style={{ left: `${pin.x}%`, top: `${pin.y}%` }}
+                        onClick={(e) => handleEditPin(pin, e)}
+                      >
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-white shadow-lg cursor-pointer transition-transform hover:scale-110 border-2 border-white ${selectedPinId === pin.id ? 'bg-blue-600 scale-110 ring-4 ring-blue-600/20' : (pin.type && pin.type !== 'issue' ? 'bg-slate-600' : 'bg-slate-900')
+                          }`}>
+                          {pin.number}
+                        </div>
+                        {selectedPinId !== pin.id && (
+                          <div className="absolute left-10 top-0 bg-slate-900 text-white text-xs px-3 py-2 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity w-48 pointer-events-none z-20">
+                            <div className="flex items-center gap-1 mb-0.5">
+                              {(pin.type || 'issue') === 'issue' ? (
+                                <AlertCircle className="w-3 h-3 text-red-400" />
+                              ) : (
+                                <MessageSquare className="w-3 h-3 text-blue-300" />
+                              )}
+                              <span className="font-bold">{pin.title}</span>
+                            </div>
+                            <span className="text-slate-300 line-clamp-2">{pin.description}</span>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+
+                    {tempPin && !selectedPinId && (
+                      <div
+                        className="absolute w-8 h-8 rounded-full bg-blue-500 opacity-50 transform -translate-x-1/2 -translate-y-1/2 border-2 border-white shadow-sm"
+                        style={{ left: `${tempPin.x}%`, top: `${tempPin.y}%` }}
+                      />
+                    )}
+                  </>
+                ) : (
+                  <div className="flex-1 flex items-center justify-center">
+                    <div className="text-lg text-slate-500 flex items-center gap-3">
+                      <Loader2 size={24} className="animate-spin" />
+                      Generating new screenshot...
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center h-full text-slate-400">
@@ -1664,29 +1791,29 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
               <p>No screens in this project. Add one from the sidebar.</p>
             </div>
           )}
-      
+
           {(isEditingPin && tempPin) && (
-            <div 
+            <div
               className="fixed z-50 bg-white rounded-xl shadow-2xl p-5 w-full max-w-sm md:w-80 border border-slate-100 animate-in fade-in zoom-in-95 duration-200 bottom-0 right-0 md:bottom-auto md:top-[120px] md:right-[40px]"
-              
+
             >
               <div className="flex justify-between items-center mb-4">
                 <h3 className="font-bold text-slate-900 flex items-center gap-2">
-                  <MapPin size={16} className="text-blue-600"/>
+                  <MapPin size={16} className="text-blue-600" />
                   {selectedPinId ? 'Edit Annotation' : 'New Annotation'}
                 </h3>
-                <button 
-                  onClick={() => { 
-                    setIsEditingPin(false); 
-                    setTempPin(null); 
-                    setSelectedPinId(null); 
-                  }} 
+                <button
+                  onClick={() => {
+                    setIsEditingPin(false);
+                    setTempPin(null);
+                    setSelectedPinId(null);
+                  }}
                   className="text-slate-400 hover:text-slate-600"
                 >
                   <X size={18} />
                 </button>
               </div>
-  
+
               <div className="space-y-4">
                 {project?.mode === 'working' && (
                   <div>
@@ -1695,22 +1822,20 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
                       <button
                         type="button"
                         onClick={() => setTempPin({ ...tempPin, type: 'issue' })}
-                        className={`py-1.5 px-3 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 ${
-                          (tempPin.type || 'issue') === 'issue'
-                            ? 'bg-indigo-600 text-white shadow-sm'
-                            : 'text-slate-600 hover:text-slate-900'
-                        }`}
+                        className={`py-1.5 px-3 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 ${(tempPin.type || 'issue') === 'issue'
+                          ? 'bg-indigo-600 text-white shadow-sm'
+                          : 'text-slate-600 hover:text-slate-900'
+                          }`}
                       >
                         <AlertCircle size={14} /> Issue
                       </button>
                       <button
                         type="button"
                         onClick={() => setTempPin({ ...tempPin, type: 'comment' })}
-                        className={`py-1.5 px-3 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 ${
-                          tempPin.type === 'comment'
-                            ? 'bg-slate-800 text-white shadow-sm'
-                            : 'text-slate-600 hover:text-slate-900'
-                        }`}
+                        className={`py-1.5 px-3 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 ${tempPin.type === 'comment'
+                          ? 'bg-slate-800 text-white shadow-sm'
+                          : 'text-slate-600 hover:text-slate-900'
+                          }`}
                       >
                         <MessageSquare size={14} /> Comment
                       </button>
@@ -1719,19 +1844,19 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
                 )}
                 <div>
                   <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Title</label>
-                  <input 
+                  <input
                     autoFocus
-                    type="text" 
+                    type="text"
                     className="w-full border-b border-slate-200 pb-1 focus:border-blue-500 focus:outline-none text-slate-900 font-medium"
                     placeholder="e.g. Navigation Logic"
                     value={tempPin.title}
-                    onChange={(e) => setTempPin({...tempPin, title: e.target.value})}
+                    onChange={(e) => setTempPin({ ...tempPin, title: e.target.value })}
                   />
                 </div>
                 <div>
                   <div className="flex justify-between items-center mb-1">
                     <label className="block text-xs font-semibold text-slate-500 uppercase">Explanation</label>
-                    <button 
+                    <button
                       onClick={handleRefineWithAI}
                       disabled={aiLoading || !tempPin.description}
                       className="hidden text-xs flex items-center gap-1 text-purple-600 hover:text-purple-700 font-medium disabled:opacity-50"
@@ -1740,17 +1865,17 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
                       {aiLoading ? 'Refining...' : 'AI Rewrite'}
                     </button>
                   </div>
-                  <textarea 
+                  <textarea
                     className="w-full bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm text-black focus:ring-2 focus:ring-blue-500 focus:outline-none min-h-[100px]"
                     placeholder="Write your notes here..."
                     value={tempPin.description}
-                    onChange={(e) => setTempPin({...tempPin, description: e.target.value})}
+                    onChange={(e) => setTempPin({ ...tempPin, description: e.target.value })}
                   />
                 </div>
-  
+
                 <div className="flex gap-2 pt-2">
                   {selectedPinId && (
-                    <button 
+                    <button
                       onClick={handleDeletePin}
                       className="px-3 py-2 text-red-500 hover:bg-red-50 rounded-lg text-sm font-medium transition-colors"
                     >
@@ -1758,7 +1883,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
                     </button>
                   )}
                   <div className="flex-1"></div>
-                  <button 
+                  <button
                     onClick={handleSavePin}
                     disabled={!tempPin.title}
                     className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition-colors disabled:opacity-50"
@@ -1772,6 +1897,154 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
           )}
         </main>
       </div>
+
+      {/* Studio Custom Page URL & Name Capture Modal */}
+      {urlModalConfig.isOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 backdrop-blur-xs p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 p-6 w-full max-w-md relative overflow-hidden font-sans">
+            <div className="flex items-center justify-between pb-4 mb-4 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center border border-blue-100 font-bold">
+                  <Globe size={20} />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-slate-900 text-sm tracking-tight">
+                    {urlModalConfig.mode === 'edit' ? 'Edit Page URL & Screenshot' : 'Add New Page from Link'}
+                  </h3>
+                  <p className="text-slate-500 text-xs font-medium">
+                    Configure URL to scan with Live Webpage Engine
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setUrlModalConfig(prev => ({ ...prev, isOpen: false }))}
+                className="text-slate-400 hover:text-slate-700 p-2 rounded-xl hover:bg-slate-100 transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* Webpage URL Input Container */}
+              <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200/90">
+                <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                  <Globe size={13} className="text-blue-500" />
+                  Webpage URL
+                </label>
+                <input
+                  type="text"
+                  className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none text-slate-900 text-xs font-mono font-medium shadow-2xs"
+                  placeholder="https://example.com"
+                  value={inputUrl}
+                  onChange={(e) => setInputUrl(e.target.value)}
+                />
+              </div>
+
+              {/* Page Name Input Container */}
+              <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200/90">
+                <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                  <Pencil size={13} className="text-slate-500" />
+                  Page Name (Optional)
+                </label>
+                <input
+                  type="text"
+                  className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none text-slate-900 text-xs font-medium shadow-2xs"
+                  placeholder="Leave blank to auto-generate from URL"
+                  value={inputName}
+                  onChange={(e) => setInputName(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-6">
+              <button
+                type="button"
+                onClick={() => setUrlModalConfig(prev => ({ ...prev, isOpen: false }))}
+                className="w-1/3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs py-3 rounded-xl transition-all border border-slate-200"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmUrlModal}
+                className="w-2/3 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-3 rounded-xl transition-all shadow-sm flex items-center justify-center gap-2"
+              >
+                <Globe size={15} />
+                Launch Live Scanner & Capture
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Live In-Browser Screenshot Scanner Modal */}
+      <LiveCaptureModal
+        isOpen={liveCaptureModalConfig.isOpen}
+        url={liveCaptureModalConfig.url}
+        device={liveCaptureModalConfig.device}
+        onClose={() => setLiveCaptureModalConfig({ isOpen: false, url: '', device: 'desktop' })}
+        onCaptureComplete={handleLiveCaptureAddPage}
+        isLocalComputeEnabled={isLocalComputeEnabled}
+      />
+
+      {/* Studio Custom Delete Page Confirmation Modal */}
+      {deletePageConfirmId && (
+        <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 backdrop-blur-xs p-4 animate-in fade-in duration-200 font-sans">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 p-6 w-full max-w-sm relative overflow-hidden text-center">
+            <div className="w-12 h-12 bg-red-50 text-red-500 rounded-2xl flex items-center justify-center border border-red-100 font-bold mx-auto mb-4">
+              <Trash2 size={24} />
+            </div>
+            <h3 className="font-extrabold text-slate-900 text-base mb-1">Delete Page?</h3>
+            <p className="text-slate-500 text-xs mb-6 font-medium">
+              All pins and notes on this screen will be permanently removed.
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setDeletePageConfirmId(null)}
+                className="w-1/2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs py-3 rounded-xl transition-all border border-slate-200"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeletePage}
+                className="w-1/2 bg-red-600 hover:bg-red-700 text-white font-bold text-xs py-3 rounded-xl transition-all shadow-sm"
+              >
+                Delete Page
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Studio Toast Notification Banner (No Native Alert Boxes!) */}
+      {toast.show && (
+        <div className="fixed top-5 right-5 z-50 animate-in slide-in-from-top-4 duration-300 pointer-events-auto">
+          <div className={`flex items-center gap-3 px-4 py-3 rounded-2xl shadow-xl border backdrop-blur-md font-sans text-xs font-semibold ${
+            toast.type === 'error'
+              ? 'bg-red-50/95 border-red-200 text-red-700'
+              : toast.type === 'success'
+              ? 'bg-emerald-50/95 border-emerald-200 text-emerald-700'
+              : 'bg-slate-900/95 border-slate-700 text-white'
+          }`}>
+            {toast.type === 'error' ? (
+              <AlertCircle size={18} className="text-red-500 shrink-0" />
+            ) : toast.type === 'success' ? (
+              <CheckCircle size={18} className="text-emerald-500 shrink-0" />
+            ) : (
+              <Info size={18} className="text-blue-400 shrink-0" />
+            )}
+            <span>{toast.message}</span>
+            <button
+              onClick={() => setToast({ show: false, message: '', type: 'info' })}
+              className="ml-2 opacity-60 hover:opacity-100 transition-opacity p-0.5 rounded-lg"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
-const puppeteer = require('puppeteer');
+// const puppeteer = require('puppeteer'); // Legacy Puppeteer service commented out
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
@@ -51,11 +51,11 @@ app.use(cookieParser());
 
 // MongoDB Connection
 mongoose.connect(process.env.MONGODB_URI)
-.then(() => console.log('✅ MongoDB connected successfully'))
-.catch(err => {
-  console.error('❌ MongoDB connection error:', err.message);
-  console.error('Please check your MongoDB URI and network connection');
-});
+  .then(() => console.log('✅ MongoDB connected successfully'))
+  .catch(err => {
+    console.error('❌ MongoDB connection error:', err.message);
+    console.error('Please check your MongoDB URI and network connection');
+  });
 
 // Razorpay Instance
 const razorpay = new Razorpay({
@@ -85,85 +85,78 @@ class Mutex {
 }
 const browserMutex = new Mutex();
 
-let globalBrowser = null;
-
-const getBrowser = async () => {
-  if (globalBrowser) {
-    try {
-      await globalBrowser.version();
-      if (globalBrowser.isConnected()) {
-        console.log('[Browser] Reusing existing browser instance.');
-        return globalBrowser;
-      }
-    } catch (e) {
-      // The browser is there, but not responding.
-      console.error('[Browser] Browser is not responsive. Re-launching...');
-    }
-
-    // If we are here, the browser is not connected or not responsive.
-    try {
-      await globalBrowser.close();
-    } catch (e) {
-      console.error('[Browser] Failed to close unresponsive browser:', e);
-    }
-    globalBrowser = null;
-  }
-
-  const isProd = process.env.NODE_ENV === 'production';
-  const launchOptions = {
-    headless: true,
-    // Dump browser process output to the console. Useful for debugging.
-    dumpio: isProd,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--disable-gpu',
-      '--window-size=1280,800',
-      // Other memory-saving flags.
-      '--disable-background-networking',
-      '--disable-background-timer-throttling',
-      '--disable-backgrounding-occluded-windows',
-      '--disable-breakpad',
-      '--disable-client-side-phishing-detection',
-      '--disable-component-update',
-      '--disable-default-apps',
-      '--disable-domain-reliability',
-      '--disable-features=AudioServiceOutOfProcess',
-      '--disable-hang-monitor',
-      '--disable-ipc-flooding-protection',
-      '--disable-notifications',
-      '--disable-offer-store-unmasked-wallet-cards',
-      '--disable-popup-blocking',
-      '--disable-print-preview',
-      '--disable-prompt-on-repost',
-      '--disable-renderer-backgrounding',
-      '--disable-sync',
-      '--disable-translate',
-      '--metrics-recording-only',
-      '--no-first-run',
-      '--safebrowsing-disable-auto-update',
-      '--enable-automation',
-      '--password-store=basic',
-      '--use-mock-keychain',
-      ...(isProd ? ['--single-process'] : []),
-    ],
-    protocolTimeout: 120000
-  };
-  if (process.env.PUPPETEER_EXECUTABLE_PATH && typeof process.env.PUPPETEER_EXECUTABLE_PATH === 'string' && process.env.PUPPETEER_EXECUTABLE_PATH.length > 0) {
-    launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
-  }
-  try {
-    console.log('[Browser] Creating new browser instance...');
-    globalBrowser = await puppeteer.launch(launchOptions);
-    console.log('[Browser] New browser instance created successfully.');
-  } catch (error) {
-    console.error('[Browser] Failed to launch browser:', error);
-    throw error;
-  }
-  return globalBrowser;
-};
+// let globalBrowser = null;
+// const getBrowser = async () => {
+//   if (globalBrowser) {
+//     try {
+//       await globalBrowser.version();
+//       if (globalBrowser.isConnected()) {
+//         console.log('[Browser] Reusing existing browser instance.');
+//         return globalBrowser;
+//       }
+//     } catch (e) {
+//       console.error('[Browser] Browser is not responsive. Re-launching...');
+//     }
+//     try {
+//       await globalBrowser.close();
+//     } catch (e) {
+//       console.error('[Browser] Failed to close unresponsive browser:', e);
+//     }
+//     globalBrowser = null;
+//   }
+//   const isProd = process.env.NODE_ENV === 'production';
+//   const launchOptions = {
+//     headless: true,
+//     dumpio: isProd,
+//     args: [
+//       '--no-sandbox',
+//       '--disable-setuid-sandbox',
+//       '--disable-dev-shm-usage',
+//       '--disable-accelerated-2d-canvas',
+//       '--disable-gpu',
+//       '--window-size=1280,800',
+//       '--disable-background-networking',
+//       '--disable-background-timer-throttling',
+//       '--disable-backgrounding-occluded-windows',
+//       '--disable-breakpad',
+//       '--disable-client-side-phishing-detection',
+//       '--disable-component-update',
+//       '--disable-default-apps',
+//       '--disable-domain-reliability',
+//       '--disable-features=AudioServiceOutOfProcess',
+//       '--disable-hang-monitor',
+//       '--disable-ipc-flooding-protection',
+//       '--disable-notifications',
+//       '--disable-offer-store-unmasked-wallet-cards',
+//       '--disable-popup-blocking',
+//       '--disable-print-preview',
+//       '--disable-prompt-on-repost',
+//       '--disable-renderer-backgrounding',
+//       '--disable-sync',
+//       '--disable-translate',
+//       '--metrics-recording-only',
+//       '--no-first-run',
+//       '--safebrowsing-disable-auto-update',
+//       '--enable-automation',
+//       '--password-store=basic',
+//       '--use-mock-keychain',
+//       ...(isProd ? ['--single-process'] : []),
+//     ],
+//     protocolTimeout: 120000
+//   };
+//   if (process.env.PUPPETEER_EXECUTABLE_PATH && typeof process.env.PUPPETEER_EXECUTABLE_PATH === 'string' && process.env.PUPPETEER_EXECUTABLE_PATH.length > 0) {
+//     launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+//   }
+//   try {
+//     console.log('[Browser] Creating new browser instance...');
+//     globalBrowser = await puppeteer.launch(launchOptions);
+//     console.log('[Browser] New browser instance created successfully.');
+//   } catch (error) {
+//     console.error('[Browser] Failed to launch browser:', error);
+//     throw error;
+//   }
+//   return globalBrowser;
+// };
 
 // NOTE: Image compression has been moved to the frontend for better performance on free-tier deployments
 // The frontend now compresses images to 200-500KB before sending them to the backend
@@ -208,7 +201,7 @@ registerCollabRoutes({
 app.post('/auth/signup', async (req, res) => {
   try {
     const { name, email, password } = req.body;
-    
+
     if (!name || !email || !password) {
       return res.status(400).json({ error: 'Name, email, and password are required' });
     }
@@ -223,17 +216,17 @@ app.post('/auth/signup', async (req, res) => {
 
     // Check if user should have local compute enabled by default (admins)
     const isSpecialUser = FREE_EMAILS[email.toLowerCase()] !== undefined;
-    
-    const user = new User({ 
-      name, 
-      email: email.toLowerCase(), 
+
+    const user = new User({
+      name,
+      email: email.toLowerCase(),
       password: hashedPassword,
       isLocalComputeEnabled: isSpecialUser // Auto-enable for admins
     });
     await user.save();
 
     // Send welcome email (non-blocking)
-    emailService.sendWelcomeEmail(email, name).catch(err => 
+    emailService.sendWelcomeEmail(email, name).catch(err =>
       console.error('[Signup] Failed to send welcome email:', err.message)
     );
 
@@ -249,7 +242,7 @@ app.post('/auth/signup', async (req, res) => {
 app.post('/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    
+
     const user = await User.findOne({ email: email.toLowerCase() });
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
@@ -260,13 +253,13 @@ app.post('/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    const userPayload = { 
-      id: user._id.toString(), 
-      name: user.name, 
+    const userPayload = {
+      id: user._id.toString(),
+      name: user.name,
       email: user.email,
       isLocalComputeEnabled: user.isLocalComputeEnabled
     };
-    
+
     const accessToken = jwt.sign(userPayload, ACCESS_TOKEN_SECRET, { expiresIn: '24h' });
     const refreshToken = jwt.sign(userPayload, REFRESH_TOKEN_SECRET, { expiresIn: '7d' });
 
@@ -335,7 +328,7 @@ app.post('/auth/logout', async (req, res) => {
 app.post('/auth/forgot-password', async (req, res) => {
   try {
     const { email } = req.body;
-    
+
     if (!email) {
       return res.status(400).json({ error: 'Email is required' });
     }
@@ -377,7 +370,7 @@ app.post('/auth/forgot-password', async (req, res) => {
 app.post('/auth/reset-password', async (req, res) => {
   try {
     const { token, newPassword } = req.body;
-    
+
     if (!token || !newPassword) {
       return res.status(400).json({ error: 'Token and new password are required' });
     }
@@ -387,7 +380,7 @@ app.post('/auth/reset-password', async (req, res) => {
     }
 
     const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
-    
+
     const user = await User.findOne({
       passwordResetToken: hashedToken,
       passwordResetExpires: { $gt: Date.now() }
@@ -421,7 +414,7 @@ app.post('/user/permissions', authenticateToken, async (req, res) => {
     const { isLocalComputeEnabled } = req.body;
 
     const user = await User.findByIdAndUpdate(
-      userId, 
+      userId,
       { isLocalComputeEnabled: !!isLocalComputeEnabled, updatedAt: new Date() },
       { new: true }
     );
@@ -431,9 +424,9 @@ app.post('/user/permissions', authenticateToken, async (req, res) => {
     }
 
     // Return updated user payload for frontend storage
-    const userPayload = { 
-      id: user._id.toString(), 
-      name: user.name, 
+    const userPayload = {
+      id: user._id.toString(),
+      name: user.name,
       email: user.email,
       isLocalComputeEnabled: user.isLocalComputeEnabled
     };
@@ -472,7 +465,7 @@ app.post('/admin/subscriptions/:id/verify', authenticateToken, async (req, res) 
     }
     const { status, message } = req.body; // status: 'approve' or 'reject'
     const subscription = await Subscription.findById(req.params.id);
-    
+
     if (!subscription) {
       return res.status(404).json({ error: 'Subscription not found' });
     }
@@ -491,9 +484,9 @@ app.post('/admin/subscriptions/:id/verify', authenticateToken, async (req, res) 
     }
 
     await subscription.save();
-    
+
     // TODO: Integrate emailService here to notify the user about the status change
-    
+
     res.json({ success: true, subscription });
   } catch (error) {
     console.error('[Admin Verify Sub] Error:', error);
@@ -511,7 +504,7 @@ app.get('/admin/stats', authenticateToken, async (req, res) => {
     const totalUsers = await User.countDocuments();
     const activeSubscriptions = await Subscription.countDocuments({ status: 'active', expiresAt: { $gt: new Date() } });
     const pendingManual = await Subscription.countDocuments({ status: 'pending_verification' });
-    
+
     // Calculate revenue (approximate)
     const paidSubs = await Subscription.find({ status: 'active', amount: { $gt: 0 } });
     const revenue = paidSubs.reduce((acc, sub) => acc + (sub.currency === 'USD' ? sub.amount * 83 : sub.amount), 0);
@@ -552,14 +545,14 @@ app.post('/admin/subscriptions/cancel', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
     const { subscriptionId } = req.body;
-    
+
     // Use findByIdAndUpdate to bypass Mongoose validation on existing invalid documents (like admin_grant plans)
     const subscription = await Subscription.findByIdAndUpdate(
       subscriptionId,
       { status: 'cancelled', adminMessage: 'Subscription cancelled by admin.' },
       { new: true }
     );
-    
+
     if (!subscription) {
       return res.status(404).json({ error: 'Subscription not found' });
     }
@@ -578,7 +571,7 @@ app.post('/admin/subscriptions/grant', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
     const { email, plan, durationDays } = req.body;
-    
+
     const user = await User.findOne({ email: email.toLowerCase() });
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
@@ -627,10 +620,10 @@ app.get('/subscription/status', authenticateToken, async (req, res) => {
 
     // Check if user has special free access
     if (FREE_EMAILS[userEmail] === 'skip') {
-      return res.json({ 
-        hasActiveSubscription: true, 
-        isSpecialAccount: true, 
-        type: 'unlimited_free' 
+      return res.json({
+        hasActiveSubscription: true,
+        isSpecialAccount: true,
+        type: 'unlimited_free'
       });
     }
 
@@ -642,7 +635,7 @@ app.get('/subscription/status', authenticateToken, async (req, res) => {
     }).sort({ expiresAt: -1 });
 
     if (activeSubscription) {
-      return res.json({ 
+      return res.json({
         hasActiveSubscription: true,
         subscription: activeSubscription
       });
@@ -655,7 +648,7 @@ app.get('/subscription/status', authenticateToken, async (req, res) => {
     }).sort({ createdAt: -1 });
 
     if (pendingSubscription) {
-      return res.json({ 
+      return res.json({
         hasActiveSubscription: false,
         pendingVerification: true,
         subscription: pendingSubscription
@@ -670,7 +663,7 @@ app.get('/subscription/status', authenticateToken, async (req, res) => {
     }).sort({ expiresAt: -1 });
 
     if (expiredSubscription) {
-      return res.json({ 
+      return res.json({
         hasActiveSubscription: false,
         isExpired: true,
         subscription: expiredSubscription
@@ -711,7 +704,7 @@ app.post('/subscription/calculate-price', authenticateToken, async (req, res) =>
 
     const finalAmount = Math.round(amount * (1 - discount / 100));
 
-    res.json({ 
+    res.json({
       originalAmount: amount,
       discount,
       finalAmount,
@@ -750,10 +743,10 @@ app.post('/subscription/create-order', authenticateToken, async (req, res) => {
       });
       await subscription.save();
 
-      return res.json({ 
-        autoApproved: true, 
+      return res.json({
+        autoApproved: true,
         subscription,
-        message: 'Subscription activated automatically for your account' 
+        message: 'Subscription activated automatically for your account'
       });
     }
 
@@ -780,7 +773,7 @@ app.post('/subscription/create-order', authenticateToken, async (req, res) => {
       });
       await subscription.save();
 
-      res.json({ 
+      res.json({
         orderId: order.id,
         amount: order.amount,
         currency: order.currency,
@@ -802,7 +795,7 @@ app.post('/subscription/create-order', authenticateToken, async (req, res) => {
       });
       await subscription.save();
 
-      res.json({ 
+      res.json({
         customPayment: true,
         upiId: currency === 'INR' ? process.env.UPI_ID : undefined,
         paypalUsername: currency !== 'INR' ? process.env.PAYPAL_USERNAME : undefined,
@@ -860,7 +853,7 @@ app.post('/subscription/verify-payment', authenticateToken, async (req, res) => 
     }
 
     const duration = subscription.plan === '1_month' ? 30 : subscription.plan === '6_month' ? 180 : 365;
-    
+
     subscription.status = 'active';
     subscription.paymentId = paymentId;
     subscription.startDate = new Date();
@@ -902,7 +895,7 @@ app.post('/admin/subscriptions/:id/verify', authenticateToken, async (req, res) 
     }
     const { status, message } = req.body; // status: 'approve' or 'reject'
     const subscription = await Subscription.findById(req.params.id);
-    
+
     if (!subscription) {
       return res.status(404).json({ error: 'Subscription not found' });
     }
@@ -921,9 +914,9 @@ app.post('/admin/subscriptions/:id/verify', authenticateToken, async (req, res) 
     }
 
     await subscription.save();
-    
+
     // TODO: Integrate emailService here to notify the user about the status change
-    
+
     res.json({ success: true, subscription });
   } catch (error) {
     console.error('[Admin Verify Sub] Error:', error);
@@ -941,7 +934,7 @@ app.get('/admin/stats', authenticateToken, async (req, res) => {
     const totalUsers = await User.countDocuments();
     const activeSubscriptions = await Subscription.countDocuments({ status: 'active', expiresAt: { $gt: new Date() } });
     const pendingManual = await Subscription.countDocuments({ status: 'pending_verification' });
-    
+
     // Calculate revenue (approximate)
     const paidSubs = await Subscription.find({ status: 'active', amount: { $gt: 0 } });
     const revenue = paidSubs.reduce((acc, sub) => acc + (sub.currency === 'USD' ? sub.amount * 83 : sub.amount), 0);
@@ -982,14 +975,14 @@ app.post('/admin/subscriptions/cancel', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
     const { subscriptionId } = req.body;
-    
+
     // Use findByIdAndUpdate to bypass Mongoose validation on existing invalid documents (like admin_grant plans)
     const subscription = await Subscription.findByIdAndUpdate(
       subscriptionId,
       { status: 'cancelled', adminMessage: 'Subscription cancelled by admin.' },
       { new: true }
     );
-    
+
     if (!subscription) {
       return res.status(404).json({ error: 'Subscription not found' });
     }
@@ -1008,7 +1001,7 @@ app.post('/admin/subscriptions/grant', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
     const { email, plan, durationDays } = req.body;
-    
+
     const user = await User.findOne({ email: email.toLowerCase() });
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
@@ -1121,9 +1114,9 @@ app.post('/projects', authenticateToken, async (req, res) => {
         });
         if (expiredSubscription) return res.status(403).json({ error: 'Subscription expired', isExpired: true });
 
-        return res.status(403).json({ 
-          error: 'Active subscription required', 
-          requiresSubscription: true 
+        return res.status(403).json({
+          error: 'Active subscription required',
+          requiresSubscription: true
         });
       }
     }
@@ -1159,7 +1152,7 @@ app.post('/projects', authenticateToken, async (req, res) => {
 app.post('/projects/:projectId/pages', authenticateToken, async (req, res) => {
   try {
     const { projectId } = req.params;
-    const { name, imageUrl, originalUrl } = req.body;
+    const { name, imageUrl, originalUrl, mobileImageUrl } = req.body;
     const userId = req.user.id;
     const userEmail = req.user.email;
 
@@ -1198,7 +1191,8 @@ app.post('/projects/:projectId/pages', authenticateToken, async (req, res) => {
     const newPage = {
       id: generateId(),
       name,
-      imageUrl: imageUrl, // Already compressed by frontend
+      imageUrl: imageUrl || '', // Already compressed by frontend (or empty string if mobile capture first)
+      mobileImageUrl: mobileImageUrl || null,
       originalUrl
     };
 
@@ -1465,101 +1459,107 @@ app.delete('/pins/:pinId', authenticateToken, async (req, res) => {
   }
 });
 
-// ==================== SCREENSHOT SERVICE ====================
+// ==================== SCREENSHOT SERVICE (COMMENTED OUT - USING CHROME EXTENSION) ====================
+// ==================== SCREENSHOT SERVICE (LEGACY PUPPETEER COMMENTED OUT) ====================
+app.get(['/take', '/api/take'], async (req, res) => {
+  return res.status(501).json({
+    success: false,
+    message: 'Server-side Puppeteer /take disabled. Real Chrome Extension Live Capture is active.'
+  });
+});
 
-app.get('/take', async (req, res) => {
-  let { url, type = 'desktop', useLocal } = req.query;
-
-  if (!url) {
-    return res.status(400).json({
-      success: false,
-      message: 'URL query parameter is required',
-    });
-  }
-  url = url.trim();
-
-  // Fix: Ensure URL has protocol
-  if (!url.startsWith('http://') && !url.startsWith('https://')) {
-    url = 'https://' + url;
-  }
-
-  if (useLocal === 'true' || useLocal === true) {
-    console.log(`[Screenshot] 💻 User requested Local Compute for ${url}`);
-    console.log(`[Screenshot] ℹ️  Currently falling back to server-side processing as client-side capture is not yet implemented.`);
-  }
-
+// app.get(['/take', '/api/take'], async (req, res) => {
+//   return res.status(501).json({
+//     success: false,
+//     message: 'Server-side Puppeteer /take disabled. Using Real Chrome Extension Live Capture.'
+//   });
+// });
+// 
+// app.get(['/take', '/api/take'], async (req, res) => {
+//   let { url, type = 'desktop', useLocal } = req.query;
+//   if (!url) {
+//     return res.status(400).json({ success: false, message: 'URL query parameter is required' });
+//   }
+//   url = url.trim();
+//   if (!url.startsWith('http://') && !url.startsWith('https://')) { url = 'https://' + url; }
+//   if (useLocal === 'true' || useLocal === true) {
+//     console.log(`[Screenshot] 💻 User requested Local Compute for ${url}`);
+//   }
+//     console.log(`[Screenshot] ℹ️  Currently falling back to server-side processing as client-side capture is not yet implemented.`);
+//   }
+// 
   // Fix: Prevent caching of screenshots to avoid 304s on retries
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-  res.setHeader('Pragma', 'no-cache');
-  res.setHeader('Expires', '0');
-
+//   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+//   res.setHeader('Pragma', 'no-cache');
+//   res.setHeader('Expires', '0');
+// 
   // let browser;
-  let page;
-  let pageClosed = false;
-
+//   let page;
+//   let pageClosed = false;
+// 
   // Helper to optimize screenshot size
-  const ensureSafeSize = async (buffer) => {
-    if (!buffer) return buffer;
-    const TARGET_SIZE_BYTES = 500 * 1024; // 500KB target
-    const HARD_LIMIT_BYTES = 800 * 1024;  // 800KB hard limit
-
-    if (buffer.length <= TARGET_SIZE_BYTES) return buffer;
-
-    console.warn(`[Screenshot] ⚠️ Image size ${(buffer.length / 1024 / 1024).toFixed(2)}MB exceeds target. Compressing...`);
-    
-    try {
+//   const ensureSafeSize = async (buffer) => {
+//     if (!buffer) return buffer;
+//     const TARGET_SIZE_BYTES = 500 * 1024; // 500KB target
+//     const HARD_LIMIT_BYTES = 800 * 1024;  // 800KB hard limit
+// 
+//     if (buffer.length <= TARGET_SIZE_BYTES) return buffer;
+// 
+//     console.warn(`[Screenshot] ⚠️ Image size ${(buffer.length / 1024 / 1024).toFixed(2)}MB exceeds target. Compressing...`);
+// 
+//     try {
       // Attempt 2: Aggressive Compression (Quality 20)
-      let compressed = await page.screenshot({ fullPage: true, type: 'webp', quality: 20 });
-      
+//       let compressed = await page.screenshot({ fullPage: true, type: 'webp', quality: 20 });
+// 
       // Check if compression actually worked
-      if (compressed.length < buffer.length && compressed.length <= TARGET_SIZE_BYTES) {
-        console.log(`[Screenshot] > Compression successful: ${(compressed.length / 1024).toFixed(2)} KB`);
-        return compressed;
-      }
-
-      console.warn(`[Screenshot] ⚠️ Still large (${(compressed.length / 1024 / 1024).toFixed(2)}MB). Resizing page...`);
-      
+//       if (compressed.length < buffer.length && compressed.length <= TARGET_SIZE_BYTES) {
+//         console.log(`[Screenshot] > Compression successful: ${(compressed.length / 1024).toFixed(2)} KB`);
+//         return compressed;
+//       }
+// 
+//       console.warn(`[Screenshot] ⚠️ Still large (${(compressed.length / 1024 / 1024).toFixed(2)}MB). Resizing page...`);
+// 
       // Attempt 3: Scale down the page (Zoom 0.6) + Quality 30
-      await page.evaluate(() => {
-        document.body.style.zoom = '0.6';
-      });
+//       await page.evaluate(() => {
+//         document.body.style.zoom = '0.6';
+//       });
       // Wait for layout to settle
-      await new Promise(r => setTimeout(r, 300));
-
-      compressed = await page.screenshot({ fullPage: true, type: 'webp', quality: 30 });
-      if (compressed.length <= HARD_LIMIT_BYTES) return compressed;
-
+//       await new Promise(r => setTimeout(r, 300));
+// 
+//       compressed = await page.screenshot({ fullPage: true, type: 'webp', quality: 30 });
+//       if (compressed.length <= HARD_LIMIT_BYTES) return compressed;
+// 
       // Final Fallback: Viewport Only
       // console.warn(`[Screenshot] ⚠️ Image (${(compressed.length / 1024 / 1024).toFixed(2)}MB) still too large. Falling back to Viewport Only...`);
       // return await page.screenshot({ fullPage: false, type: 'webp', quality: 70 });
-      
+// 
       // Final Fallback: Crop height to ensure it fits (Safe Mode)
-      console.warn(`[Screenshot] ⚠️ Image still too large (${(compressed.length / 1024 / 1024).toFixed(2)}MB). Cropping to safe height...`);
-      const viewport = page.viewport();
-      return await page.screenshot({ 
-          type: 'webp', 
-          quality: 50,
-          fullPage: false,
-          clip: { x: 0, y: 0, width: viewport.width, height: Math.min(4000, viewport.height) }
-      });
-    } catch (e) {
-      console.warn('[Screenshot] Compression attempt failed', e);
+//       console.warn(`[Screenshot] ⚠️ Image still too large (${(compressed.length / 1024 / 1024).toFixed(2)}MB). Cropping to safe height...`);
+//       const viewport = page.viewport();
+//       return await page.screenshot({
+//         type: 'webp',
+//         quality: 50,
+//         fullPage: false,
+//         clip: { x: 0, y: 0, width: viewport.width, height: Math.min(4000, viewport.height) }
+//       });
+//     } catch (e) {
+//       console.warn('[Screenshot] Compression attempt failed', e);
       // If all else fails, return a viewport screenshot which is guaranteed to be small
-      try {
-         return await page.screenshot({ fullPage: false, type: 'webp', quality: 50 });
-      } catch (err) {
-         return buffer; // Return original if absolutely everything fails
-      }
-    }
-  };
-
+//       try {
+//         return await page.screenshot({ fullPage: false, type: 'webp', quality: 50 });
+//       } catch (err) {
+//         return buffer; // Return original if absolutely everything fails
+//       }
+//     }
+//   };
+// 
   // 🔁 helper: take screenshot attempt
-  const attemptScreenshot = async (userAgent, options = {}) => {
-    const { scroll = true, fullPage = true } = options;
-    const attemptName = scroll ? (fullPage ? 'Full' : 'Viewport') : 'Safe';
-    const isProd = process.env.NODE_ENV === 'production';
-    console.log(`[Screenshot] ⚙️  Config: ${isProd ? 'Production' : 'Development'} | UA: ${type} | Mode: ${scroll ? 'Full' : 'Safe'}`);
-
+//   const attemptScreenshot = async (userAgent, options = {}) => {
+//     const { scroll = true, fullPage = true } = options;
+//     const attemptName = scroll ? (fullPage ? 'Full' : 'Viewport') : 'Safe';
+//     const isProd = process.env.NODE_ENV === 'production';
+//     console.log(`[Screenshot] ⚙️  Config: ${isProd ? 'Production' : 'Development'} | UA: ${type} | Mode: ${scroll ? 'Full' : 'Safe'}`);
+// 
     // const launchOptions = {
     //   headless: true,
     //   protocolTimeout: 240000, 
@@ -1591,7 +1591,7 @@ app.get('/take', async (req, res) => {
     //     ] : [])
     //   ],
     // };
-
+// 
     // // Docker/Render specific: Use system chrome if path is provided
     // if (isProd && process.env.PUPPETEER_EXECUTABLE_PATH) {
     //   launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
@@ -1600,38 +1600,50 @@ app.get('/take', async (req, res) => {
     // 
     // console.log(`[Screenshot] 🚀 Launching browser...`);
     // browser = await puppeteer.launch(launchOptions);
-
-    const browser = await getBrowser();
-    page = await browser.newPage();
-
-    page.on('error', err => {
-        console.error('[Screenshot] Page error:', err.message);
-        pageClosed = true;
-    });
-    page.on('pageerror', pageErr => {
-        console.error('[Screenshot] Uncaught page exception:', pageErr.message);
-    });
-
-    // Stealth: Hide webdriver property
-    await page.evaluateOnNewDocument(() => {
-      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+// 
+//     const browser = await getBrowser();
+//     page = await browser.newPage();
+// 
+//     page.on('error', err => {
+//       console.error('[Screenshot] Page error:', err.message);
+//       pageClosed = true;
+//     });
+//     page.on('pageerror', pageErr => {
+      // Quiet third-party site script exceptions (e.g., analytics, ad pixels)
+//       console.debug('[Screenshot] Ignored third-party page script exception:', pageErr.message);
+//     });
+// 
+    // Stealth & Third-Party Script Safeguards: Hide webdriver property & stub missing analytics
+//     await page.evaluateOnNewDocument(() => {
+//       Object.defineProperty(navigator, 'webdriver', { get: () => false });
       // Mock languages
-      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+//       Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
       // Mock plugins
-      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+//       Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
       // Mock maxTouchPoints
-      Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 1 });
+//       Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 1 });
       // Mock chrome
-      window.chrome = { runtime: {} };
-      // Mock permissions
-      const originalQuery = window.navigator.permissions.query;
-      window.navigator.permissions.query = (parameters) => (
-        parameters.name === 'notifications' ?
-          Promise.resolve({ state: 'denied' }) :
-          originalQuery(parameters)
-      );
-    });
-
+//       window.chrome = { runtime: {} };
+// 
+      // Stub common analytics/conversion methods to prevent third-party script crashes
+//       if (typeof window.initializeConversion === 'undefined') {
+//         window.initializeConversion = function () { };
+//       }
+//       const originalAddEventListener = EventTarget.prototype.addEventListener;
+//       EventTarget.prototype.addEventListener = function (type, listener, options) {
+//         if (this === null || this === undefined) return;
+//         return originalAddEventListener.call(this, type, listener, options);
+//       };
+//       const originalQuery = window.navigator.permissions ? window.navigator.permissions.query : null;
+//       if (originalQuery) {
+//         window.navigator.permissions.query = (parameters) => (
+//           parameters.name === 'notifications' ?
+//             Promise.resolve({ state: 'denied' }) :
+//             originalQuery(parameters)
+//         );
+//       }
+//     });
+// 
     // // 🛡️ Block heavy media to prevent crashes/timeouts
     // await page.setRequestInterception(true);
     // page.on('request', (req) => {
@@ -1642,209 +1654,197 @@ app.get('/take', async (req, res) => {
     //     req.continue();
     //   }
     // });
-
-     // Note: Request Interception removed to prevent "s.startsWith is not a function" errors
-+    // and instability with data/blob URLs.
-
+// 
+    // Note: Request Interception removed to prevent instability with data/blob URLs.
+// 
+//     const isMobile = type === 'mobile';
+// 
+//     try {
+//       await page.setViewport({
+//         width: isMobile ? 375 : 1280,
+//         height: isMobile ? 667 : 800,
+//         isMobile: isMobile,
+//         hasTouch: isMobile,
+//         deviceScaleFactor: 1 // Standard scale factor prevents Chromium 16k px canvas overflow on mobile full page screenshots
+//       }).catch(() => { });
+//     } catch (e) { }
+// 
     // 🔒 lifecycle guards
-    page.on('close', () => { pageClosed = true; });
-    page.on('error', () => { pageClosed = true; });
-    // page.on('framedetached', () => { pageClosed = true; }); // REMOVED: Caused false positives on sites with dynamic iframes
-
-    const isMobile = type === 'mobile';
-    
-    await page.setViewport({ 
-      width: isMobile ? 375 : 1280, // Reduced desktop width
-      height: isMobile ? 667 : 800,
-      isMobile: isMobile,
-      hasTouch: isMobile,
-      deviceScaleFactor: isMobile ? 2 : 1
-    });
-    await page.setUserAgent(userAgent);
-
-    // 🚀 navigate
-    console.log(`[Screenshot] 🌍 Navigating to ${url}...`);
-    try {
-      await page.goto(url, {
-        waitUntil: 'networkidle0', // More stable than domcontentloaded
-        timeout: 90000, // Increased timeout for slow networks/sites
-      });
-      console.log(`[Screenshot] > Navigation to ${url} successful.`);
-    } catch (error) {
-      console.error(`[Screenshot] > Navigation to ${url} failed:`, error.message);
-      throw error;
-    }
-    // 📏 Ensure page has content before proceeding
-    try {
-      await page.waitForFunction(() => document.body && document.body.scrollHeight > 0, { timeout: 5000 });
-    } catch (e) {
-      console.log(`[Screenshot] ⚠️ Body height check timed out. Waiting for network idle...`);
-      // Fallback: wait for network idle if DOM is empty/stuck
-      try {
-        await page.waitForNetworkIdle({ idleTime: 500, timeout: 10000 });
-      } catch (err) {
-        // Ignore network idle timeout
-      }
-    }
-
-    // 🧠 ensure DOM exists
-    console.log(`[Screenshot] ⏳ Waiting for DOM content...`);
-    await page.waitForFunction(
-      () => !!document && !!document.body,
-    );
-    console.log(`[Screenshot] > DOM content ready.`);
-
-    if (pageClosed || page.isClosed()) {
-      throw new Error('PAGE_CLOSED');
-    }
-
-    // 🧬 SPA hydration
-    // await page.waitForTimeout(2000);
-
-    // 🔄 auto-scroll (lazy load)
-    if (scroll) try {
-      console.log(`[Screenshot] 📜 Scrolling to trigger lazy content (videos/shoppable looks)...`);
-      await page.evaluate(async () => {
-        await new Promise(resolve => {
-          let totalHeight = 0;
-          const distance = 150; // Slightly larger chunks for speed
-          const timer = setInterval(() => {
-            const scrollHeight = document.body.scrollHeight;
-            window.scrollBy(0, distance);
-            totalHeight += distance;
-            if (totalHeight >= scrollHeight || totalHeight > 25000) { 
-              clearInterval(timer);
-              resolve();
-            }
-          }, 50); // Faster interval + small chunks = smooth human-like scroll
-        });
-      });
-
-      console.log(`[Screenshot] ⏱️  Waiting for network idle after scroll...`);
-      // Wait for lazy-loaded resources (videos/images) to actually load
-      try {
-        await page.waitForNetworkIdle({ idleTime: 500, timeout: 5000 });
-      } catch (e) {
-        console.log(`[Screenshot] ⚠️ Network idle timeout (continuing anyway)...`);
-      }
-      
-      // Wait for final render/animations
-      await new Promise(r => setTimeout(r, 2000));
-    } catch {
-      console.log(`[Screenshot] ⚠️ Scroll error (non-fatal)`);
-    }
-
-    // 🖼️ wait for images & videos
-    console.log(`[Screenshot] 🖼️  Verifying media loaded...`);
-    if (scroll) try {
-      await page.evaluate(async () => {
-        const images = Array.from(document.images);
-        await Promise.all(
-          images.map(img =>
-            img.complete
-              ? Promise.resolve()
-              : new Promise(res => {
-                  img.onload = img.onerror = res;
-                  setTimeout(res, 2000); // Timeout for individual images
-                })
-          )
-        );
-
-        const videos = Array.from(document.querySelectorAll('video'));
-        await Promise.all(
-          videos.map(v =>
-            v.readyState >= 2
-              ? Promise.resolve()
-              : new Promise(res => {
-                  v.onloadeddata = v.onerror = res;
-                  setTimeout(res, 2000); // Timeout for videos
-                })
-          )
-        );
-      });
-    } catch {
+//     page.on('close', () => { pageClosed = true; });
+//     page.on('error', () => { pageClosed = true; });
+// 
+    // 🚀 Fast Navigation (waitUntil domcontentloaded for instant 2-3s capture)
+//     console.log(`[Screenshot] 🌍 Navigating to ${url}...`);
+//     try {
+//       await page.goto(url, {
+//         waitUntil: 'domcontentloaded',
+//         timeout: 15000,
+//       });
+//       console.log(`[Screenshot] > Navigation to ${url} successful.`);
+//     } catch (error) {
+//       console.warn(`[Screenshot] > domcontentloaded timeout for ${url}, continuing anyway...`);
+//     }
+// 
+    // 📏 Ensure DOM body is ready
+//     try {
+//       await page.waitForFunction(() => !!document && !!document.body, { timeout: 3000 });
+//     } catch (e) {
+      // Continue anyway
+//     }
+// 
+//     if (pageClosed || page.isClosed()) {
+//       throw new Error('PAGE_CLOSED');
+//     }
+// 
+    // 🔄 Ultra-Fast Chunked Scroll (triggers lazy load in ~300ms)
+//     if (scroll) try {
+//       console.log(`[Screenshot] 📜 Running ultra-fast scroll & popup dismissal...`);
+//       await page.evaluate(async () => {
+        // Dismiss popups & promotional newsletter overlays
+//         document.querySelectorAll('[class*="popup"], [class*="modal"], [id*="newsletter"], [class*="newsletter"], [id*="popup"]').forEach(e => e.remove());
+//         await new Promise(resolve => {
+//           let totalHeight = 0;
+//           const distance = 500;
+//           const maxScroll = Math.min(Math.max(document.body.scrollHeight, document.documentElement.scrollHeight), 25000);
+//           const timer = setInterval(() => {
+//             window.scrollBy(0, distance);
+//             totalHeight += distance;
+//             if (totalHeight >= maxScroll) {
+//               clearInterval(timer);
+//               window.scrollTo(0, 0);
+//               resolve();
+//             }
+//           }, 15);
+//         });
+//       });
+// 
+      // Settle layout
+//       await new Promise(r => setTimeout(r, 200));
+//     } catch {
+//       console.log(`[Screenshot] ⚠️ Scroll error (non-fatal)`);
+//     }
+// 
+    // 🖼️ Fast image settle (800ms max timeout)
+//     if (scroll) try {
+//       await page.evaluate(async () => {
+//         const images = Array.from(document.images).slice(0, 20);
+//         await Promise.all(
+//           images.map(img =>
+//             img.complete
+//               ? Promise.resolve()
+//               : new Promise(res => {
+//                 img.onload = img.onerror = res;
+//                 setTimeout(res, 600);
+//               })
+//           )
+//         );
+//       });
+//     } catch {
       // Ignore media wait errors
-    }
-
+//     }
+// 
     // 📏 Cap height to prevent OOM on infinite scroll pages (e.g. mobile views)
-    if (scroll) try {
-      await page.evaluate(() => {
-        const maxH = 15000;
-        if (document.body.scrollHeight > maxH) {
-            document.body.style.height = maxH + 'px';
-            document.body.style.overflow = 'hidden';
-            console.log(`[Screenshot] > Capped page height to ${maxH}px.`);
-        }
-      });
-    } catch (e) {}
-
+//     if (scroll) try {
+//       await page.evaluate(() => {
+//         const maxH = 25000;
+//         const currentH = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+//         if (currentH > maxH) {
+//           document.body.style.height = maxH + 'px';
+//           document.body.style.overflow = 'hidden';
+//           console.log(`[Screenshot] > Capped page height to ${maxH}px.`);
+//         }
+//       });
+//     } catch (e) { }
+// 
     // ⬆️ back to top
-    try {
-      console.log(`[Screenshot] ⬆️  Resetting view to top...`);
-      await page.evaluate(() => window.scrollTo(0, 0));
-      await new Promise(r => setTimeout(r, 1000)); // Wait for header to reset
-    } catch {
+//     try {
+//       console.log(`[Screenshot] ⬆️  Resetting view to top...`);
+//       await page.evaluate(() => window.scrollTo(0, 0));
+//       await new Promise(r => setTimeout(r, 1000)); // Wait for header to reset
+//     } catch {
       // Ignore
-    }
-
-    if (pageClosed || page.isClosed()) {
-      throw new Error('PAGE_CLOSED');
-    }
-
-    // 📸 screenshot
-    // console.log(`[Screenshot] 📸 Capturing final image...`);
-    try {
-      console.log(`[Screenshot] > Taking screenshot (fullPage: ${fullPage})...`);
-      const buffer = await page.screenshot(fullPage ? {
-        fullPage: true, 
-        type: 'webp', // WebP is faster and smaller
-        quality: 70,
-        captureBeyondViewport: true,
-      } : { fullPage: false, type: 'webp', quality: 70 });
-
-      if (!buffer || buffer.length === 0) {
-        throw new Error('Generated empty screenshot buffer');
-      }
-      console.log(`[Screenshot] > Screenshot successful (${(buffer.length / 1024).toFixed(2)} KB).`);
-      return buffer;
-
-    } catch (e) {
-      console.log(`[Screenshot] ⚠️ Full page screenshot failed (${e.message}), capturing viewport only...`);
-      return await page.screenshot({
-        fullPage: false,
-        type: 'webp',
-        quality: 70,
-      });
-    }
-  };
-
-  const unlock = await browserMutex.lock();
-  try {
-    console.log(`[Screenshot] Attempting ${type} capture for ${url}`);
-    console.log('[take] Running Attempt 1: Standard Mode');
-
-    let ua;
-    if (type === 'mobile') {
-      ua = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile Safari/604.1';
-    } else {
-      ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
-    }
-
+//     }
+// 
+//     if (pageClosed || page.isClosed()) {
+//       throw new Error('PAGE_CLOSED');
+//     }
+// 
+    // 📸 screenshot (full-page capture guarantees full webpage height up to 25,000px on both desktop and mobile)
+//     try {
+//       console.log(`[Screenshot] > Taking full-height screenshot (${type})...`);
+//       const targetHeight = await page.evaluate(() => {
+//         const bodyH = document.body ? document.body.scrollHeight : 0;
+//         const docH = document.documentElement ? document.documentElement.scrollHeight : 0;
+//         const mainEl = document.querySelector('main');
+//         const mainH = mainEl ? mainEl.scrollHeight : 0;
+//         const maxCalc = Math.max(bodyH, docH, mainH, 800);
+//         return Math.min(maxCalc, 25000);
+//       });
+//       console.log(`[Screenshot] > Calculated full document target height: ${targetHeight}px`);
+// 
+//       let buffer;
+//       try {
+//         buffer = await page.screenshot({
+//           fullPage: true,
+//           type: 'webp',
+//           quality: 75,
+//           captureBeyondViewport: true
+//         });
+//       } catch (fullPageErr) {
+//         console.warn(`[Screenshot] fullPage failed (${fullPageErr.message}), executing clipped capture...`);
+//         buffer = await page.screenshot({
+//           fullPage: false,
+//           clip: { x: 0, y: 0, width: isMobile ? 375 : 1280, height: Math.min(16000, targetHeight) },
+//           type: 'webp',
+//           quality: 75,
+//         });
+//       }
+// 
+//       if (buffer && buffer.length > 5000) {
+//         console.log(`[Screenshot] > Screenshot successful (${(buffer.length / 1024).toFixed(2)} KB).`);
+//         return buffer;
+//       }
+//       throw new Error('Generated small screenshot buffer');
+//     } catch (e) {
+//       console.log(`[Screenshot] ⚠️ Screenshot fallback triggered (${e.message}), executing full-page fallback...`);
+//       await page.evaluate(() => window.scrollTo(0, 0));
+//       const fallbackBuffer = await page.screenshot({
+//         fullPage: true,
+//         type: 'webp',
+//         quality: 65,
+//         captureBeyondViewport: true
+//       });
+//       return fallbackBuffer;
+//     }
+//   };
+// 
+//   const unlock = await browserMutex.lock();
+//   try {
+//     console.log(`[Screenshot] Attempting ${type} capture for ${url}`);
+//     console.log('[take] Running Attempt 1: Standard Mode');
+// 
+//     let ua;
+//     if (type === 'mobile') {
+//       ua = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile Safari/604.1';
+//     } else {
+//       ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+//     }
+// 
     // // 1️⃣ Attempt 1: Standard (Scroll + FullPage)
     // let screenshot = await attemptScreenshot(ua, { scroll: true, fullPage: true });
-
+// 
     // // 📏 Size Check & Optimization (Target: ~500KB)
     // const TARGET_SIZE_BYTES = 500 * 1024; // 500KB target
     // const HARD_LIMIT_BYTES = 800 * 1024;  // 800KB hard limit
-
+// 
     // if (screenshot.length > TARGET_SIZE_BYTES) {
     //   console.warn(`[Screenshot] ⚠️ Image size ${(screenshot.length / 1024 / 1024).toFixed(2)}MB exceeds target. Compressing...`);
-      
+// 
     //   // Attempt 2: Aggressive Compression (Quality 20)
     //   try {
     //     screenshot = await page.screenshot({ fullPage: true, type: 'webp', quality: 20, captureBeyondViewport: true });
     //   } catch (e) { console.warn('Compression attempt failed', e); }
-
+// 
     //   if (screenshot.length > TARGET_SIZE_BYTES) {
     //      console.warn(`[Screenshot] ⚠️ Still large (${(screenshot.length / 1024 / 1024).toFixed(2)}MB). Maximizing compression...`);
     //      // Attempt 3: Max Compression (Quality 10) + Resize via viewport (simulated by just taking a lower quality shot)
@@ -1852,7 +1852,7 @@ app.get('/take', async (req, res) => {
     //         screenshot = await page.screenshot({ fullPage: true, type: 'webp', quality: 10, captureBeyondViewport: true });
     //      } catch (e) { console.warn('Max compression failed', e); }
     //   }
-
+// 
     //   // Final Fallback: Safe Mode (Viewport Only) if still too big
     //   // This guarantees the image is small enough for MongoDB
     //   if (screenshot.length > HARD_LIMIT_BYTES) {
@@ -1865,95 +1865,133 @@ app.get('/take', async (req, res) => {
     //     screenshot = await attemptScreenshot(ua, { scroll: false, fullPage: false });
     //   }
     // }
-
-    let screenshot = await attemptScreenshot(ua, { scroll: true, fullPage: true });
-    screenshot = await ensureSafeSize(screenshot);
-
-    if (!screenshot || screenshot.length === 0) {
-      throw new Error('Empty screenshot buffer');
-    }
-
-    console.log(`[Screenshot] ✅ ${type} screenshot captured successfully for ${url}`);
-    res.set('Content-Type', 'image/webp');
-    return res.send(Buffer.from(screenshot));
-
-  } catch (err) {
-    console.warn(`[Screenshot] ${type} failed for ${url}: ${err.message}`);
-    console.warn('[Screenshot] 🔄 Retrying with Light Mode (No Scroll, FullPage)...');
-
-    try {
+// 
+//     let screenshot = await attemptScreenshot(ua, { scroll: true, fullPage: true });
+//     screenshot = await ensureSafeSize(screenshot);
+// 
+//     if (!screenshot || screenshot.length === 0) {
+//       throw new Error('Empty screenshot buffer');
+//     }
+// 
+//     console.log(`[Screenshot] ✅ ${type} screenshot captured successfully for ${url}`);
+//     res.set('Content-Type', 'image/webp');
+//     return res.send(Buffer.from(screenshot));
+// 
+//   } catch (err) {
+//     console.warn(`[Screenshot] ${type} failed for ${url}: ${err.message}`);
+//     console.warn('[Screenshot] 🔄 Retrying with Light Mode (No Scroll, FullPage)...');
+// 
+//     try {
       // if (browser) await browser.close();
-      if (page) {
-          await page.close().catch(() => {});
-          page = null;
-        }
-      pageClosed = false;
-
-      let ua;
-      if (type === 'mobile') {
-        ua = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile Safari/604.1';
-      } else {
-        ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
-      }
-
+//       if (page) {
+//         await page.close().catch(() => { });
+//         page = null;
+//       }
+//       pageClosed = false;
+// 
+//       let ua;
+//       if (type === 'mobile') {
+//         ua = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile Safari/604.1';
+//       } else {
+//         ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+//       }
+// 
       // 2️⃣ Attempt 2: Light Mode (No Manual Scroll + FullPage) - Prevents OOM on heavy sites
       // const screenshot = await attemptScreenshot(ua, { scroll: false, fullPage: true });
-      let screenshot = await attemptScreenshot(ua, { scroll: false, fullPage: true });
-      screenshot = await ensureSafeSize(screenshot);
-
-      console.log(`[Screenshot] ✅ Light Mode successful for ${url}`);
-      res.set('Content-Type', 'image/webp');
-      return res.send(Buffer.from(screenshot));
-
-    } catch (retryErr) {
-      console.error(`[Screenshot] Light Mode failed for ${url}: ${retryErr.message}`);
-      console.warn('[Screenshot] ⚠️ All full-page attempts failed. Trying Safe Mode (Viewport only)...');
-
-      try {
+//       let screenshot = await attemptScreenshot(ua, { scroll: false, fullPage: true });
+//       screenshot = await ensureSafeSize(screenshot);
+// 
+//       console.log(`[Screenshot] ✅ Light Mode successful for ${url}`);
+//       res.set('Content-Type', 'image/webp');
+//       return res.send(Buffer.from(screenshot));
+// 
+//     } catch (retryErr) {
+//       console.error(`[Screenshot] Light Mode failed for ${url}: ${retryErr.message}`);
+//       console.warn('[Screenshot] ⚠️ All full-page attempts failed. Trying Safe Mode (Viewport only)...');
+// 
+//       try {
         // if (browser) await browser.close();
-        if (page) await page.close().catch(() => {});
-        pageClosed = false;                                                                                                                                                                              
-        
+//         if (page) await page.close().catch(() => { });
+//         pageClosed = false;
+// 
         // 🛡️ Safe Mode: Desktop UA, No Scroll, Viewport Only
-        let ua;
-        if (type === 'mobile') {
-          ua = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile Safari/604.1';
-        } else {
-          ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
-        }
-
+//         let ua;
+//         if (type === 'mobile') {
+//           ua = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile Safari/604.1';
+//         } else {
+//           ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+//         }
+// 
         // 3️⃣ Attempt 3: Safe Mode (Viewport Only)
         // const safeScreenshot = await attemptScreenshot(ua, { scroll: false, fullPage: false });
-        let safeScreenshot = await attemptScreenshot(ua, { scroll: false, fullPage: false });
-        safeScreenshot = await ensureSafeSize(safeScreenshot);
-
-        console.log(`[Screenshot] ✅ Safe Mode screenshot captured for ${url}`);
-        res.set('Content-Type', 'image/webp');
-        return res.send(Buffer.from(safeScreenshot));
-      } catch (safeErr) {
-        console.error(`[Screenshot] Safe Mode failed for ${url}: ${safeErr.message}`);
-        let reason = 'UNKNOWN_FAILURE';
-        if (safeErr.message.includes('Navigating frame was detached') || safeErr.message.includes('Target closed')) {
-          reason = 'BROWSER_CRASH';
-        } else if (safeErr.message.includes('timed out')) {
-          reason = 'TIMEOUT';
-        } else if (safeErr.message.includes('net::')) {
-          reason = 'NAVIGATION_ERROR';
-        }
-        return res.status(422).json({
-          success: false,
-          reason: reason,
-          message: 'Unable to capture screenshot. Site may be blocking automated access.',
-          url,
-        });
-      }
-    }
-  } finally {
+//         let safeScreenshot = await attemptScreenshot(ua, { scroll: false, fullPage: false });
+//         safeScreenshot = await ensureSafeSize(safeScreenshot);
+// 
+//         console.log(`[Screenshot] ✅ Safe Mode screenshot captured for ${url}`);
+//         res.set('Content-Type', 'image/webp');
+//         return res.send(Buffer.from(safeScreenshot));
+//       } catch (safeErr) {
+//         console.error(`[Screenshot] Safe Mode failed for ${url}: ${safeErr.message}, attempting Emergency Viewport capture...`);
+//         try {
+//           const emergencyBuffer = await page.screenshot({ fullPage: false, type: 'webp', quality: 60 });
+//           res.set('Content-Type', 'image/webp');
+//           return res.send(Buffer.from(emergencyBuffer));
+//         } catch (e) {
+//           console.error('[Screenshot] Emergency snapshot failed:', e.message);
+//           return res.status(500).json({
+//             success: false,
+//             message: 'Unable to capture screenshot.',
+//             url,
+//           });
+//         }
+//       }
+//     }
+//   } finally {
     // if (browser) {
     //   await browser.close().catch(() => {});
     // }
-    if (page) await page.close().catch(() => {});
-    unlock();
+//     if (page) await page.close().catch(() => { });
+//     unlock();
+//   }
+// });
+// 
+// // Real-Time CORS Viewport Proxy to unblock X-Frame-Options & CSP in Live Capture Modal
+app.get(['/proxy-view', '/api/proxy-view'], async (req, res) => {
+  let { url } = req.query;
+  if (!url) return res.status(400).send('Missing url query parameter');
+
+  url = url.trim();
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    url = 'https://' + url;
+  }
+
+  try {
+    const fetchRes = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      }
+    });
+
+    let html = await fetchRes.text();
+
+    // Remove CSP meta tags to ensure styles and scripts render cleanly
+    html = html.replace(/<meta[^>]*http-equiv=["']Content-Security-Policy["'][^>]*>/gi, '');
+
+    // Inject <base href="..."> so all relative links, styles & images load natively
+    const baseTag = `<base href="${url.replace(/\/$/, '')}/">`;
+    if (html.includes('<head>')) {
+      html = html.replace('<head>', `<head>${baseTag}`);
+    } else {
+      html = baseTag + html;
+    }
+
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (err) {
+    console.error('[ProxyView] Error:', err.message);
+    res.status(500).send(`Unable to proxy website: ${err.message}`);
   }
 });
 

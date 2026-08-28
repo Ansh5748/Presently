@@ -88,7 +88,7 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
   const [selectedOtherGroupId, setSelectedOtherGroupId] = useState<string>('');
   const [isEditingAssigneeStatus, setIsEditingAssigneeStatus] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
-  
+
   const [messageText, setMessageText] = useState('');
   const [visibility, setVisibility] = useState<MessageVisibility>('all');
   const [sendingMsg, setSendingMsg] = useState(false);
@@ -106,18 +106,18 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
   const assigneeRef = useRef<HTMLDivElement>(null);
   const groupRef = useRef<HTMLDivElement>(null);
 
-  const isCreator = issue && (typeof issue.createdBy === 'object' ? issue.createdBy._id : issue.createdBy) === currentUserId;
+  const isCreator = issue && (typeof issue.createdBy === 'object' ? (issue.createdBy as any)._id || (issue.createdBy as any).id : issue.createdBy)?.toString() === currentUserId;
   const isAssignedToMe = issue && issue.assigneeId &&
-    (typeof issue.assigneeId === 'object' ? issue.assigneeId._id : issue.assigneeId) === currentUserId;
+    (typeof issue.assigneeId === 'object' ? (issue.assigneeId as any)._id || (issue.assigneeId as any).id : issue.assigneeId)?.toString() === currentUserId;
 
   const effectiveIsGroupMember = assigneePermissions?.isProjectGroupMember ?? isGroupMember;
   const effectiveCanAssign = assigneePermissions?.canAssign ?? isPMorOwner;
   const canCrossGroupSearch = !!assigneePermissions?.canCrossGroupSearch;
 
   const canUserEditAssigneeOrStatus = !readOnly && (isPMorOwner || isCreator || isAssignedToMe || effectiveCanAssign);
-  const canChangeAssignee = canUserEditAssigneeOrStatus && effectiveCanAssign;
-  const canChangeStatus = canUserEditAssigneeOrStatus;
-  const canSeeAssigneeButton = (effectiveIsGroupMember || effectiveCanAssign);
+  const canChangeAssignee = !readOnly && (isAssignedToMe || isPMorOwner || effectiveCanAssign);
+  const canChangeStatus = !readOnly && (isPMorOwner || isCreator || isAssignedToMe || effectiveCanAssign);
+  const canSeeAssigneeButton = (effectiveIsGroupMember || effectiveCanAssign || isAssignedToMe);
 
   useEffect(() => {
     setLocalPin(pin);
@@ -178,8 +178,8 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
       if (existing) {
         const existingAssigneeId = existing.assigneeId
           ? (typeof existing.assigneeId === 'object'
-              ? (existing.assigneeId as any)._id || (existing.assigneeId as any).id
-              : existing.assigneeId).toString()
+            ? (existing.assigneeId as any)._id || (existing.assigneeId as any).id
+            : existing.assigneeId).toString()
           : '';
         setIssue(existing);
         setAssigneeId(existingAssigneeId);
@@ -322,8 +322,8 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
       const saved = await ApiService.savePinIssue(pin.id, payload);
       const savedAssigneeId = saved.assigneeId
         ? (typeof saved.assigneeId === 'object'
-            ? (saved.assigneeId as any)._id || (saved.assigneeId as any).id
-            : saved.assigneeId).toString()
+          ? (saved.assigneeId as any)._id || (saved.assigneeId as any).id
+          : saved.assigneeId).toString()
         : '';
       setIssue(saved);
       setAssigneeId(savedAssigneeId);
@@ -354,7 +354,7 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
       if (pinModeDraft === 'comment') {
         try {
           await ApiService.deletePinIssue(localPin.id);
-        } catch {}
+        } catch { }
         const updatedPin = await ApiService.updatePin(localPin.id, { title, description, type: 'comment' });
         onPinUpdated?.(updatedPin);
         setEditingPinDetails(false);
@@ -626,22 +626,20 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
                     <button
                       type="button"
                       onClick={() => setPinModeDraft('issue')}
-                      className={`py-1 px-3 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 ${
-                        pinModeDraft === 'issue'
+                      className={`py-1 px-3 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 ${pinModeDraft === 'issue'
                           ? 'bg-indigo-600 text-white shadow-sm'
                           : 'text-slate-600 hover:text-slate-900'
-                      }`}
+                        }`}
                     >
                       <AlertCircle className="w-3.5 h-3.5" /> Issue
                     </button>
                     <button
                       type="button"
                       onClick={() => setPinModeDraft('comment')}
-                      className={`py-1 px-3 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 ${
-                        pinModeDraft === 'comment'
+                      className={`py-1 px-3 rounded-md text-xs font-semibold transition flex items-center justify-center gap-1.5 ${pinModeDraft === 'comment'
                           ? 'bg-slate-800 text-white shadow-sm'
                           : 'text-slate-600 hover:text-slate-900'
-                      }`}
+                        }`}
                     >
                       <MessageSquare className="w-3.5 h-3.5" /> Comment
                     </button>
