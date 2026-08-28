@@ -15,45 +15,122 @@ const SPECIAL_EMAILS = [
   'divyanshgupta4949@gmail.com'
 ];
 
-// Helper: Width-only resize and quality compression using HTML Canvas (Preserves full width & sharp text)
-const forceCompressWithCanvas = (base64: string, maxWidth = 1920, quality = 0.82): Promise<string> => {
+// Production screenshot compressor.
+// WebP is preferred for both desktop and mobile because it provides
+// significantly better size/quality for webpage screenshots.
+// JPEG is used only as a compatibility fallback.
+const forceCompressWithCanvas = (
+  base64: string,
+  maxWidth = 1920,
+  quality = 0.82
+): Promise<string> => {
   return new Promise((resolve) => {
     const img = new Image();
-    img.src = base64;
+
     img.onload = () => {
-      const canvas = document.createElement('canvas');
-      let width = img.width;
-      let height = img.height;
-
-      // ONLY scale down if width exceeds maxWidth (NEVER scale down width based on height)
-      if (width > maxWidth) {
-        height = Math.round((height * maxWidth) / width);
-        width = maxWidth;
-      }
-
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return resolve(base64);
-
-      // High quality image smoothing for sharp text readability
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(img, 0, 0, width, height);
-
-      // Try WebP first for ultra-lightweight high quality, fallback to JPEG 0.82
       try {
-        const webpData = canvas.toDataURL('image/webp', quality);
-        if (webpData && webpData.startsWith('data:image/webp') && webpData.length > 1000) {
-          return resolve(webpData);
-        }
-      } catch (e) {}
+        const originalWidth = img.naturalWidth || img.width;
+        const originalHeight = img.naturalHeight || img.height;
 
-      resolve(canvas.toDataURL('image/jpeg', quality));
+        if (!originalWidth || !originalHeight) {
+          resolve(base64);
+          return;
+        }
+
+        let width = originalWidth;
+        let height = originalHeight;
+
+        // Preserve aspect ratio.
+        if (width > maxWidth) {
+          height = Math.round(
+            (height * maxWidth) / width
+          );
+          width = maxWidth;
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext('2d');
+
+        if (!ctx) {
+          resolve(base64);
+          return;
+        }
+
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+
+        ctx.drawImage(
+          img,
+          0,
+          0,
+          originalWidth,
+          originalHeight,
+          0,
+          0,
+          width,
+          height
+        );
+
+        // Prefer WebP.
+        try {
+          const webpData = canvas.toDataURL(
+            'image/webp',
+            quality
+          );
+
+          if (
+            webpData &&
+            webpData.startsWith('data:image/webp') &&
+            webpData.length > 1000
+          ) {
+            resolve(webpData);
+            return;
+          }
+        } catch (error) {
+          console.warn(
+            '[Image Compression] WebP encoding failed, falling back to JPEG.',
+            error
+          );
+        }
+
+        // Compatibility fallback.
+        try {
+          resolve(
+            canvas.toDataURL(
+              'image/jpeg',
+              quality
+            )
+          );
+        } catch (error) {
+          console.error(
+            '[Image Compression] JPEG encoding also failed.',
+            error
+          );
+
+          resolve(base64);
+        }
+      } catch (error) {
+        console.error(
+          '[Image Compression] Canvas compression failed.',
+          error
+        );
+
+        resolve(base64);
+      }
     };
+
     img.onerror = () => {
+      console.error(
+        '[Image Compression] Failed to load source image.'
+      );
+
       resolve(base64);
     };
+
+    img.src = base64;
   });
 };
 
@@ -76,32 +153,741 @@ const base64ToBlob = (base64: string): Blob => {
 };
 
 /**
- * Compress base64 image while strictly maintaining full image width so text remains 100% sharp and readable.
+ * Production desktop/general screenshot compression.
+ *
+ * Goals:
+ * - Prefer WebP.
+ * - Target approximately 250–350 KB.
+ * - Never intentionally exceed 400 KB when a reasonable
+ *   compressed representation can be produced.
+ * - Preserve screenshot dimensions unless size requires
+ *   a controlled reduction.
+ * - Never enlarge or recompress an already-small image.
  */
-const compressImageBase64 = async (base64String: string): Promise<string> => {
+const compressImageBase64 = async (
+  base64String: string
+): Promise<string> => {
   try {
-    if (!base64String || !base64String.startsWith('data:image')) {
+    if (
+      !base64String ||
+      !base64String.startsWith('data:image')
+    ) {
+      console.warn('[Frontend Compression] Invalid image input. Keeping original.');
       return base64String;
     }
 
-    const startSize = (base64String.length * 3) / 4;
-    const startSizeKB = startSize / 1024;
-    console.log(`[Frontend Compression] Starting compression... Original size: ${startSizeKB.toFixed(2)} KB`);
+    const getBytes = (data: string): number => {
+      const commaIndex = data.indexOf(',');
+      if (commaIndex === -1) return 0;
 
-    // 🚀 Do NOT re-compress images already under 600KB
-    if (startSizeKB <= 600) {
-      console.log('[Frontend Compression] Skipping compression (already under 600KB)');
+      const base64 = data.substring(commaIndex + 1);
+
+      // More accurate base64 byte calculation.
+      const padding =
+        base64.endsWith('==') ? 2 :
+        base64.endsWith('=') ? 1 : 0;
+
+      return Math.max(
+        0,
+        Math.floor((base64.length * 3) / 4) - padding
+      );
+    };
+
+    const bytesToKB = (bytes: number) =>
+      bytes / 1024;
+
+    const originalBytes = getBytes(base64String);
+    const originalKB = bytesToKB(originalBytes);
+
+    console.log(
+      `[Frontend Compression] Starting. Original: ${originalKB.toFixed(2)} KB`
+    );
+
+    /*
+     * ------------------------------------------------------------
+     * HARD PRODUCTION LIMIT
+     * ------------------------------------------------------------
+     *
+     * <=400 KB:
+     *   Do nothing.
+     *
+     * This prevents unnecessary recompression and quality loss.
+     */
+    if (originalKB <= 400) {
+      console.log(
+        '[Frontend Compression] Already <= 400 KB. Keeping original.'
+      );
+
       return base64String;
     }
 
-    // Width-only canvas compression preserves full desktop layout width & text anti-aliasing
-    const compressedBase64 = await forceCompressWithCanvas(base64String, 1920, 0.82);
-    const finalSize = (compressedBase64.length * 3) / 4;
-    console.log(`[Frontend Compression] Final size: ${(finalSize / 1024).toFixed(2)} KB (${((1 - finalSize / startSize) * 100).toFixed(1)}% reduction)`);
+    const FINAL_MAX_KB = 400;
+    const IDEAL_MIN_KB = 250;
+    const IDEAL_MAX_KB = 350;
 
-    return compressedBase64;
+    /*
+     * This function determines how large the NEXT compression
+     * jump should be.
+     *
+     * IMPORTANT:
+     *
+     * We are NOT trying to go from 2 MB directly to 300 KB.
+     *
+     * Instead:
+     *
+     * 2.2 MB → ~1.4 MB
+     *       → ~600 KB
+     *       → ~350 KB
+     *
+     * And:
+     *
+     * 5.6 MB → ~800 KB
+     *       → ~550 KB
+     *       → ~350 KB
+     *
+     * This dramatically reduces Canvas encoding work.
+     */
+    const getNextTargetKB = (currentKB: number): number => {
+      if (currentKB > 10 * 1024) {
+        return Math.max(5000, currentKB - 5000);
+      }
+
+      if (currentKB > 5 * 1024) {
+        return Math.max(800, currentKB - 4800);
+      }
+
+      if (currentKB > 2 * 1024) {
+        return Math.max(400, currentKB - 1800);
+      }
+
+      if (currentKB > 1024) {
+        return Math.max(350, currentKB - 800);
+      }
+
+      if (currentKB > 500) {
+        return Math.max(350, currentKB - 250);
+      }
+
+      // 400–500 KB:
+      // Only remove roughly 100–150 KB.
+      return Math.max(350, currentKB - 125);
+    };
+
+    /*
+     * ------------------------------------------------------------
+     * ADAPTIVE CANVAS COMPRESSION
+     * ------------------------------------------------------------
+     *
+     * We estimate a quality from the desired size ratio and make
+     * only a few attempts around that estimate.
+     *
+     * We never run the old 50+ attempt matrix.
+     */
+    const compressTowardTarget = async (
+      source: string,
+      currentBytes: number,
+      targetKB: number,
+      maxWidth: number
+    ): Promise<{
+      result: string;
+      bytes: number;
+    }> => {
+      const currentKB = bytesToKB(currentBytes);
+
+      /*
+       * Estimate how aggressive the compression needs to be.
+       *
+       * WebP quality is not linear with file size, so this is only
+       * a starting point. We verify the actual result afterward.
+       */
+      const ratio = Math.max(
+        0.08,
+        Math.min(0.95, targetKB / currentKB)
+      );
+
+      /*
+       * Convert size ratio into a starting quality.
+       *
+       * We intentionally stay away from extremely low quality
+       * values because webpage screenshots contain small text.
+       */
+      let estimatedQuality =
+        0.35 + (ratio * 0.50);
+
+      estimatedQuality = Math.max(
+        0.42,
+        Math.min(0.88, estimatedQuality)
+      );
+
+      const qualities = [
+        estimatedQuality,
+        Math.max(0.38, estimatedQuality - 0.10),
+        Math.max(0.34, estimatedQuality - 0.20)
+      ];
+
+      let bestResult = source;
+      let bestBytes = currentBytes;
+
+      console.log(
+        `[Frontend Compression] Adaptive pass: ${currentKB.toFixed(2)} KB → target ~${targetKB.toFixed(2)} KB`
+      );
+
+      for (let i = 0; i < qualities.length; i++) {
+        const quality = qualities[i];
+
+        const candidate =
+          await forceCompressWithCanvas(
+            source,
+            maxWidth,
+            quality
+          );
+
+        const candidateBytes = getBytes(candidate);
+        const candidateKB = bytesToKB(candidateBytes);
+
+        console.log(
+          `[Frontend Compression] Adaptive attempt ${i + 1}/${qualities.length} — quality=${quality.toFixed(3)} → ${candidateKB.toFixed(2)} KB`
+        );
+
+        if (
+          candidateBytes > 0 &&
+          candidateBytes < bestBytes
+        ) {
+          bestResult = candidate;
+          bestBytes = candidateBytes;
+        }
+
+        /*
+         * We reached the desired target.
+         */
+        if (
+          candidateKB >= IDEAL_MIN_KB &&
+          candidateKB <= IDEAL_MAX_KB
+        ) {
+          console.log(
+            `[Frontend Compression] Ideal range reached: ${candidateKB.toFixed(2)} KB`
+          );
+
+          return {
+            result: candidate,
+            bytes: candidateBytes
+          };
+        }
+
+        /*
+         * We are already safely under the production ceiling.
+         * Do not destroy more quality unnecessarily.
+         */
+        if (
+          candidateKB <= FINAL_MAX_KB &&
+          candidateKB >= IDEAL_MIN_KB
+        ) {
+          return {
+            result: candidate,
+            bytes: candidateBytes
+          };
+        }
+      }
+
+      return {
+        result: bestResult,
+        bytes: bestBytes
+      };
+    };
+
+    /*
+     * ------------------------------------------------------------
+     * MAXIMUM 3 ADAPTIVE PASSES
+     * ------------------------------------------------------------
+     *
+     * This is the important performance improvement.
+     *
+     * Example:
+     *
+     * 5.6 MB
+     *   ↓
+     * ~800 KB
+     *   ↓
+     * ~550 KB
+     *   ↓
+     * ~350 KB
+     *
+     * No giant quality/width matrix.
+     */
+    let currentResult = base64String;
+    let currentBytes = originalBytes;
+
+    for (let pass = 1; pass <= 3; pass++) {
+      const currentKB = bytesToKB(currentBytes);
+
+      if (currentKB <= FINAL_MAX_KB) {
+        break;
+      }
+
+      const targetKB = getNextTargetKB(currentKB);
+
+      console.log(
+        `[Frontend Compression] PASS ${pass}/3: ${currentKB.toFixed(2)} KB → target ${targetKB.toFixed(2)} KB`
+      );
+
+      /*
+       * Keep desktop screenshots at a sensible resolution.
+       *
+       * Only reduce width for very large images.
+       */
+      let maxWidth = 1920;
+
+      if (currentKB > 5 * 1024) {
+        maxWidth = 1600;
+      } else if (currentKB > 2 * 1024) {
+        maxWidth = 1760;
+      }
+
+      const compressed =
+        await compressTowardTarget(
+          currentResult,
+          currentBytes,
+          targetKB,
+          maxWidth
+        );
+
+      /*
+       * Safety:
+       * If compression did not actually make the image smaller,
+       * stop immediately.
+       */
+      if (
+        compressed.bytes <= 0 ||
+        compressed.bytes >= currentBytes
+      ) {
+        console.warn(
+          '[Frontend Compression] Adaptive pass did not reduce size. Stopping safely.'
+        );
+
+        break;
+      }
+
+      currentResult = compressed.result;
+      currentBytes = compressed.bytes;
+
+      console.log(
+        `[Frontend Compression] PASS ${pass} result: ${(currentBytes / 1024).toFixed(2)} KB`
+      );
+
+      if (
+        currentBytes / 1024 >= IDEAL_MIN_KB &&
+        currentBytes / 1024 <= IDEAL_MAX_KB
+      ) {
+        break;
+      }
+    }
+
+    const finalKB = bytesToKB(currentBytes);
+
+    console.log(
+      `[Frontend Compression] Final: ${finalKB.toFixed(2)} KB`
+    );
+
+    console.log(
+      `[Frontend Compression] Reduction: ${(
+        (1 - currentBytes / originalBytes) *
+        100
+      ).toFixed(1)}%`
+    );
+
+    /*
+     * Production safety:
+     *
+     * Return the best compressed image we actually generated.
+     * Never return a larger image than the original.
+     */
+    return currentBytes < originalBytes
+      ? currentResult
+      : base64String;
+
   } catch (error) {
-    console.error('[Frontend Compression] Failed:', error);
+    console.error(
+      '[Frontend Compression] Failed:',
+      error
+    );
+
+    /*
+     * Screenshot saving must NEVER fail because compression
+     * failed.
+     */
+    return base64String;
+  }
+};
+
+/**
+ * Production mobile screenshot compression.
+ *
+ * Mobile screenshots are usually tall, so width is intentionally
+ * limited to 600px to keep the final image practical for:
+ *
+ * - MongoDB document size
+ * - API payload size
+ * - mobile loading
+ * - project editor rendering
+ *
+ * WebP is preferred for Android/mobile as requested.
+ */
+const compressMobileImageBase64 = async (
+  base64String: string
+): Promise<string> => {
+  try {
+    if (
+      !base64String ||
+      !base64String.startsWith('data:image')
+    ) {
+      console.warn(
+        '[Mobile Compression] Invalid image input. Keeping original.'
+      );
+
+      return base64String;
+    }
+
+    const getBytes = (data: string): number => {
+      const commaIndex = data.indexOf(',');
+
+      if (commaIndex === -1) return 0;
+
+      const base64 = data.substring(commaIndex + 1);
+
+      const padding =
+        base64.endsWith('==') ? 2 :
+        base64.endsWith('=') ? 1 : 0;
+
+      return Math.max(
+        0,
+        Math.floor((base64.length * 3) / 4) - padding
+      );
+    };
+
+    const bytesToKB = (bytes: number) =>
+      bytes / 1024;
+
+    const originalBytes = getBytes(base64String);
+    const originalKB = bytesToKB(originalBytes);
+
+    console.log(
+      `[Mobile Compression] Starting. Original: ${originalKB.toFixed(2)} KB`
+    );
+
+    /*
+     * Never touch already-small mobile screenshots.
+     */
+    if (originalKB <= 400) {
+      console.log(
+        '[Mobile Compression] Already <= 400 KB. Keeping original.'
+      );
+
+      return base64String;
+    }
+
+    const FINAL_MAX_KB = 400;
+    const IDEAL_MIN_KB = 250;
+    const IDEAL_MAX_KB = 350;
+
+    /*
+     * Same adaptive size-jump strategy as desktop.
+     *
+     * 400–500 KB → remove ~125 KB
+     * 500 KB–1 MB → remove ~250 KB
+     * 1–2 MB → remove ~800 KB
+     * 2–5 MB → remove ~1.8 MB
+     * 5–10 MB → remove ~4.8 MB
+     */
+    const getNextTargetKB = (currentKB: number): number => {
+      if (currentKB > 10 * 1024) {
+        return Math.max(5000, currentKB - 5000);
+      }
+
+      if (currentKB > 5 * 1024) {
+        return Math.max(800, currentKB - 4800);
+      }
+
+      if (currentKB > 2 * 1024) {
+        return Math.max(400, currentKB - 1800);
+      }
+
+      if (currentKB > 1024) {
+        return Math.max(350, currentKB - 800);
+      }
+
+      if (currentKB > 500) {
+        return Math.max(350, currentKB - 250);
+      }
+
+      return Math.max(350, currentKB - 125);
+    };
+
+    const result = await new Promise<string>((resolve) => {
+      const img = new Image();
+
+      img.onload = async () => {
+        try {
+          const originalWidth =
+            img.naturalWidth || img.width;
+
+          const originalHeight =
+            img.naturalHeight || img.height;
+
+          console.log(
+            '[Mobile Compression] Original dimensions:',
+            {
+              width: originalWidth,
+              height: originalHeight
+            }
+          );
+
+          /*
+           * Mobile uses 600px as the normal maximum width.
+           *
+           * We only go lower when necessary.
+           */
+          const getMobileWidth = (
+            currentKB: number
+          ): number => {
+            if (currentKB > 5 * 1024) {
+              return 520;
+            }
+
+            if (currentKB > 2 * 1024) {
+              return 560;
+            }
+
+            return 600;
+          };
+
+          let currentResult = base64String;
+          let currentBytes = originalBytes;
+
+          for (let pass = 1; pass <= 3; pass++) {
+            const currentKB =
+              bytesToKB(currentBytes);
+
+            if (currentKB <= FINAL_MAX_KB) {
+              break;
+            }
+
+            const targetKB =
+              getNextTargetKB(currentKB);
+
+            const maxWidth =
+              getMobileWidth(currentKB);
+
+            /*
+             * Calculate current dimensions.
+             */
+            const scale = Math.min(
+              1,
+              maxWidth / originalWidth
+            );
+
+            const width = Math.max(
+              1,
+              Math.round(originalWidth * scale)
+            );
+
+            const height = Math.max(
+              1,
+              Math.round(originalHeight * scale)
+            );
+
+            console.log(
+              `[Mobile Compression] PASS ${pass}/3:`,
+              {
+                currentKB: currentKB.toFixed(2),
+                targetKB: targetKB.toFixed(2),
+                width,
+                height,
+                scale: scale.toFixed(3)
+              }
+            );
+
+            const ratio =
+              Math.max(
+                0.08,
+                Math.min(
+                  0.95,
+                  targetKB / currentKB
+                )
+              );
+
+            let estimatedQuality =
+              0.35 + (ratio * 0.50);
+
+            estimatedQuality =
+              Math.max(
+                0.42,
+                Math.min(
+                  0.88,
+                  estimatedQuality
+                )
+              );
+
+            /*
+             * Only three quality attempts per adaptive pass.
+             *
+             * This is vastly faster than the previous
+             * width × quality matrix.
+             */
+            const qualities = [
+              estimatedQuality,
+              Math.max(
+                0.38,
+                estimatedQuality - 0.10
+              ),
+              Math.max(
+                0.34,
+                estimatedQuality - 0.20
+              )
+            ];
+
+            let bestResult = currentResult;
+            let bestBytes = currentBytes;
+
+            for (
+              let i = 0;
+              i < qualities.length;
+              i++
+            ) {
+              const quality = qualities[i];
+
+              /*
+               * IMPORTANT:
+               *
+               * Always encode from the CURRENT result,
+               * not from the original screenshot.
+               *
+               * This allows:
+               *
+               * 5.6 MB
+               *   → 800 KB
+               *   → 550 KB
+               *   → 350 KB
+               */
+              const candidate =
+                await forceCompressWithCanvas(
+                  currentResult,
+                  width,
+                  quality
+                );
+
+              const candidateBytes =
+                getBytes(candidate);
+
+              const candidateKB =
+                bytesToKB(candidateBytes);
+
+              console.log(
+                `[Mobile Compression] Adaptive attempt ${i + 1}/${qualities.length} — quality=${quality.toFixed(3)} → ${candidateKB.toFixed(2)} KB`
+              );
+
+              if (
+                candidateBytes > 0 &&
+                candidateBytes < bestBytes
+              ) {
+                bestResult = candidate;
+                bestBytes = candidateBytes;
+              }
+
+              if (
+                candidateKB >= IDEAL_MIN_KB &&
+                candidateKB <= IDEAL_MAX_KB
+              ) {
+                console.log(
+                  `[Mobile Compression] Ideal range reached: ${candidateKB.toFixed(2)} KB`
+                );
+
+                resolve(candidate);
+                return;
+              }
+            }
+
+            /*
+             * Safety:
+             * If the pass did not reduce the image, stop.
+             */
+            if (
+              bestBytes <= 0 ||
+              bestBytes >= currentBytes
+            ) {
+              console.warn(
+                '[Mobile Compression] Pass did not reduce size. Stopping safely.'
+              );
+
+              break;
+            }
+
+            currentResult = bestResult;
+            currentBytes = bestBytes;
+
+            console.log(
+              `[Mobile Compression] PASS ${pass} result: ${(currentBytes / 1024).toFixed(2)} KB`
+            );
+
+            if (
+              currentBytes / 1024 >= IDEAL_MIN_KB &&
+              currentBytes / 1024 <= IDEAL_MAX_KB
+            ) {
+              break;
+            }
+          }
+
+          const finalKB =
+            bytesToKB(currentBytes);
+
+          console.log(
+            `[Mobile Compression] Final: ${finalKB.toFixed(2)} KB`
+          );
+
+          console.log(
+            `[Mobile Compression] Reduction: ${(
+              (1 - currentBytes / originalBytes) *
+              100
+            ).toFixed(1)}%`
+          );
+
+          resolve(
+            currentBytes < originalBytes
+              ? currentResult
+              : base64String
+          );
+
+        } catch (error) {
+          console.error(
+            '[Mobile Compression] Processing failed:',
+            error
+          );
+
+          resolve(base64String);
+        }
+      };
+
+      img.onerror = () => {
+        console.error(
+          '[Mobile Compression] Failed to load source image.'
+        );
+
+        resolve(base64String);
+      };
+
+      img.src = base64String;
+    });
+
+    return result;
+
+  } catch (error) {
+    console.error(
+      '[Mobile Compression] Failed:',
+      error
+    );
+
+    /*
+     * Compression must never prevent screenshot saving.
+     */
     return base64String;
   }
 };
@@ -239,7 +1025,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         const numMatch = pin ? `#${pin.number}`.includes(q) || pin.number.toString() === q : false;
         const statusMatch = iss.status.toLowerCase().includes(q);
         const labelMatch = (iss.labels || []).some(l => l.toLowerCase().includes(q));
-        const assigneeName = (typeof iss.assigneeId === 'object' ? iss.assigneeId?.name : '').toLowerCase();
+        const assigneeName = (typeof iss.assigneeId === 'object' ? (iss.assigneeId as any)?.name || '' : '').toLowerCase();
         return titleMatch || descMatch || numMatch || statusMatch || labelMatch || assigneeName.includes(q);
       });
     }
@@ -622,7 +1408,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       setIsEditingPin(false);
 
       if (targetType === 'issue' && project.mode === 'working') {
-        const finalSavedPin = updatedPins.find(p => p.id === savedPin.id) || savedPin;
+        const finalSavedPin = updatedPins.find((p: Pin) => p.id === savedPin.id) || savedPin;
         setIssueModalPin(finalSavedPin);
         setShowIssueModal(true);
       }
@@ -910,7 +1696,19 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
     if (!project || !liveCaptureModalConfig.url) return;
     try {
       // Compress the screenshot before updating or adding page
-      const screenshotBase64 = await compressImageBase64(rawScreenshotBase64);
+      const screenshotBase64 =
+        liveCaptureModalConfig.device === 'mobile'
+          ? await compressMobileImageBase64(rawScreenshotBase64)
+          : await compressImageBase64(rawScreenshotBase64);
+
+      console.log('[LIVE CAPTURE FINAL IMAGE]', {
+      device: liveCaptureModalConfig.device,
+      rawBytes: rawScreenshotBase64.length,
+      rawMB: (rawScreenshotBase64.length / 1024 / 1024).toFixed(2),
+      compressedBytes: screenshotBase64.length,
+      compressedMB: (screenshotBase64.length / 1024 / 1024).toFixed(2),
+      compressedType: screenshotBase64.substring(0, 40)
+    });
 
       // IF RE-CAPTURING / EDITING EXISTING PAGE SCREENSHOT (DESKTOP OR MOBILE):
       if (activePageId && liveCaptureModalConfig.isEditingPage) {
