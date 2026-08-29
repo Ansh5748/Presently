@@ -824,7 +824,7 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
           }`.toLowerCase();
 
         const popupName =
-          /(modal|popup|pop-up|overlay|dialog|lightbox|newsletter|subscribe|consent|cookie|announcement|promotion|promo)/i
+          /(modal|popup|pop-up|overlay|dialog|lightbox|newsletter|subscribe|consent|cookie)/i
             .test(identity);
 
         /*
@@ -864,13 +864,27 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
         * ============================================================
         */
 
+        const zIndex =
+          parseInt(
+            style.zIndex,
+            10
+          );
+
+        const hasHighPopupZIndex =
+          Number.isFinite(zIndex) &&
+          zIndex >= POPUP_MIN_Z_INDEX;
+
         const largeCenteredPopup =
           centered &&
           widthRatio >= 0.40 &&
           heightRatio >= 0.20 &&
           heightRatio <= 0.95 &&
           top >= -50 &&
-          bottom <= viewportHeight + 50;
+          bottom <= viewportHeight + 50 &&
+          (
+            popupName ||
+            hasHighPopupZIndex
+          );
 
         if (
           largeCenteredPopup
