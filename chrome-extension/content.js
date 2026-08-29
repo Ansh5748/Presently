@@ -60,10 +60,20 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
   // We do not intentionally wait 2-5 seconds for a popup.
   const POPUP_OBSERVER_ENABLED = true;
 
-  // Maximum time after clicking/hiding a popup before capture
-  // continues normally. Kept very small so popup handling does
-  // not materially slow screenshots.
-  const POPUP_SETTLE_MAX_MS = 300;
+  // Small rendering buffer only after we actually close a popup.
+  // We NEVER wait for a popup to appear.
+  const POPUP_SETTLE_MAX_MS = 150;
+
+  // Immediately hide high-confidence popup/backdrop elements
+  // while their real close button is still rendering.
+  const HIDE_POPUP_BEFORE_CLOSE_BUTTON = true;
+
+  // Only use aggressive hiding for very strong popup candidates.
+  // This protects normal fixed headers/chat buttons/etc.
+  const POPUP_MIN_Z_INDEX = 100;
+
+  // Restore popup elements after capture.
+  const RESTORE_HIDDEN_POPUPS = true;
 
   // Do not aggressively remove arbitrary fixed elements.
   // Only high-confidence header/footer candidates are hidden.
@@ -452,6 +462,11 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
   let popupCleanupInProgress = false;
 
+  // Elements temporarily hidden while a popup is active.
+  // We restore them after capture finishes.
+  const temporarilyHiddenPopupElements =
+    new Map();
+
   /**
    * Returns the visible text of an element.
    */
@@ -612,6 +627,371 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
    * - Runs whenever the website adds/changes DOM elements.
    * - Tries the real close button first.
    */
+
+      /**
+     * Temporarily hide a popup/backdrop immediately.
+     *
+     * This is the fallback for the important case where:
+     *
+     * popup appears
+     *    ↓
+     * close icon has NOT rendered yet
+     *
+     * We hide the visual popup immediately so it can never
+     * cover the screenshot.
+     *
+     * Later, when its close button appears, the normal
+     * closeObviousPopupButtons() logic can click it.
+     */
+    function temporarilyHidePopupElement(element, reason) {
+      if (
+        !element ||
+        !element.isConnected ||
+        temporarilyHiddenPopupElements.has(element)
+      ) {
+        return false;
+      }
+
+      try {
+        const style =
+          window.getComputedStyle(element);
+
+        const original = {
+          visibility:
+            element.style.visibility,
+
+          opacity:
+            element.style.opacity,
+
+          pointerEvents:
+            element.style.pointerEvents
+        };
+
+        temporarilyHiddenPopupElements.set(
+          element,
+          original
+        );
+
+        element.style.setProperty(
+          'visibility',
+          'hidden',
+          'important'
+        );
+
+        element.style.setProperty(
+          'opacity',
+          '0',
+          'important'
+        );
+
+        element.style.setProperty(
+          'pointer-events',
+          'none',
+          'important'
+        );
+
+        console.log(
+          '[PCT] POPUP HIDDEN BEFORE CLOSE BUTTON',
+          {
+            reason,
+            tag:
+              element.tagName,
+            id:
+              element.id,
+            className:
+              typeof element.className === 'string'
+                ? element.className
+                : '',
+            zIndex:
+              style.zIndex
+          }
+        );
+
+        return true;
+
+      } catch (error) {
+        console.warn(
+          '[PCT] FAILED TO HIDE POPUP ELEMENT',
+          error
+        );
+
+        temporarilyHiddenPopupElements.delete(
+          element
+        );
+
+        return false;
+      }
+    }
+
+    /**
+     * Detect a strong popup/backdrop candidate.
+     *
+     * We deliberately DO NOT hide arbitrary fixed elements.
+     *
+     * We target:
+     *
+     * 1. Full-screen dark/translucent backdrops
+     * 2. Large centered fixed dialogs
+     * 3. Elements explicitly named modal/popup/dialog/overlay/etc.
+     */
+    function isLikelyPopupElement(element) {
+      try {
+        if (
+          !element ||
+          !element.isConnected ||
+          element === document.body ||
+          element === document.documentElement
+        ) {
+          return false;
+        }
+
+        const style =
+          window.getComputedStyle(element);
+
+        const rect =
+          element.getBoundingClientRect();
+
+        if (
+          rect.width < 20 ||
+          rect.height < 20
+        ) {
+          return false;
+        }
+
+        if (
+          style.display === 'none' ||
+          style.visibility === 'hidden' ||
+          parseFloat(style.opacity || '1') <= 0
+        ) {
+          return false;
+        }
+
+        const position =
+          style.position;
+
+        if (
+          position !== 'fixed' &&
+          position !== 'absolute'
+        ) {
+          return false;
+        }
+
+        const viewportWidth =
+          window.innerWidth;
+
+        const viewportHeight =
+          window.innerHeight;
+
+        const widthRatio =
+          rect.width /
+          Math.max(1, viewportWidth);
+
+        const heightRatio =
+          rect.height /
+          Math.max(1, viewportHeight);
+
+        const top =
+          rect.top;
+
+        const left =
+          rect.left;
+
+        const right =
+          rect.right;
+
+        const bottom =
+          rect.bottom;
+
+        const centered =
+          Math.abs(
+            (
+              left +
+              rect.width / 2
+            ) -
+            viewportWidth / 2
+          ) <
+          viewportWidth * 0.25;
+
+        const identity =
+          `${element.id || ''} ${
+            typeof element.className === 'string'
+              ? element.className
+              : ''
+          } ${
+            element.getAttribute('role') || ''
+          } ${
+            element.getAttribute('aria-label') || ''
+          }`.toLowerCase();
+
+        const popupName =
+          /(modal|popup|pop-up|overlay|dialog|lightbox|newsletter|subscribe|consent|cookie|announcement|promotion|promo)/i
+            .test(identity);
+
+        /*
+        * ============================================================
+        * 1. FULL-SCREEN BACKDROP
+        *
+        * IMPORTANT:
+        * NO z-index requirement.
+        *
+        * This is what should remove the black/dark background
+        * immediately.
+        * ============================================================
+        */
+
+        const coversViewport =
+          widthRatio >= 0.90 &&
+          heightRatio >= 0.80 &&
+          top <= 10 &&
+          left <= 10 &&
+          right >= viewportWidth - 10 &&
+          bottom >= viewportHeight - 10;
+
+        if (
+          coversViewport
+        ) {
+          return true;
+        }
+
+        /*
+        * ============================================================
+        * 2. LARGE CENTERED POPUP
+        *
+        * Again, don't require z-index.
+        *
+        * The screenshot you showed is exactly this type:
+        * a large centered white popup sitting above the page.
+        * ============================================================
+        */
+
+        const largeCenteredPopup =
+          centered &&
+          widthRatio >= 0.40 &&
+          heightRatio >= 0.20 &&
+          heightRatio <= 0.95 &&
+          top >= -50 &&
+          bottom <= viewportHeight + 50;
+
+        if (
+          largeCenteredPopup
+        ) {
+          return true;
+        }
+
+        /*
+        * ============================================================
+        * 3. EXPLICIT POPUP/MODAL ELEMENT
+        * ============================================================
+        */
+
+        if (
+          popupName &&
+          widthRatio >= 0.25 &&
+          heightRatio >= 0.15
+        ) {
+          return true;
+        }
+
+        /*
+        * ============================================================
+        * 4. NATIVE DIALOG
+        * ============================================================
+        */
+
+        if (
+          element.tagName === 'DIALOG' &&
+          element.open
+        ) {
+          return true;
+        }
+
+        return false;
+
+      } catch {
+        return false;
+      }
+    }
+
+    /**
+     * Find and immediately hide popup/backdrop elements.
+     *
+     * This is intentionally synchronous and does not wait.
+     */
+    function hidePopupOverlaysImmediately() {
+      if (
+        !HIDE_POPUP_BEFORE_CLOSE_BUTTON ||
+        !captureSession ||
+        captureSession.cancelled
+      ) {
+        return 0;
+      }
+
+      let hidden = 0;
+
+      try {
+        const elements =
+          Array.from(
+            document.querySelectorAll(
+              'body *'
+            )
+          );
+
+        for (
+          const element of elements
+        ) {
+          if (
+            !isLikelyPopupElement(
+              element
+            )
+          ) {
+            continue;
+          }
+
+          if (
+            temporarilyHidePopupElement(
+              element,
+              'popup-overlay-detected'
+            )
+          ) {
+            hidden++;
+          }
+
+          /*
+          * We normally only need a backdrop + popup.
+          * Avoid touching dozens of elements on a badly
+          * structured website.
+          */
+          if (
+            hidden >= 4
+          ) {
+            break;
+          }
+        }
+
+      } catch (error) {
+        console.warn(
+          '[PCT] POPUP OVERLAY SCAN FAILED',
+          error
+        );
+      }
+
+      if (
+        hidden > 0
+      ) {
+        console.log(
+          '[PCT] POPUP/BACKDROP HIDDEN IMMEDIATELY',
+          {
+            hidden,
+            scrollY:
+              Math.round(
+                window.scrollY
+              )
+          }
+        );
+      }
+
+      return hidden;
+    }
   function startPopupCleanupObserver() {
     if (
       !POPUP_OBSERVER_ENABLED ||
@@ -636,24 +1016,68 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
       popupCleanupInProgress = true;
 
       try {
+        /*
+        * --------------------------------------------------------
+        * STEP 1
+        *
+        * Immediately hide the popup/backdrop.
+        *
+        * This happens BEFORE we look for the close button.
+        * So the popup cannot appear in the screenshot even
+        * when its X button has not rendered yet.
+        * --------------------------------------------------------
+        */
+        const hidden =
+          hidePopupOverlaysImmediately();
+
+        if (
+          hidden > 0
+        ) {
+          console.log(
+            '[PCT] POPUP VISUAL SUPPRESSION ACTIVE',
+            {
+              hidden,
+              scrollY:
+                Math.round(
+                  window.scrollY
+                )
+            }
+          );
+        }
+
+        /*
+        * --------------------------------------------------------
+        * STEP 2
+        *
+        * Now try the real close button.
+        *
+        * If the X has already rendered, click it normally.
+        * --------------------------------------------------------
+        */
         const clicked =
           closeObviousPopupButtons();
 
-        if (clicked > 0) {
+        if (
+          clicked > 0
+        ) {
           console.log(
             '[PCT] POPUP OBSERVER CLOSED POPUP',
             {
               clicked,
               scrollY:
-                Math.round(window.scrollY)
+                Math.round(
+                  window.scrollY
+                )
             }
           );
         }
+
       } catch (error) {
         console.warn(
           '[PCT] POPUP OBSERVER CLEANUP ERROR',
           error
         );
+
       } finally {
         popupCleanupInProgress = false;
       }
@@ -705,9 +1129,15 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
             }
 
             if (relevantChange) {
-              // Run in the next microtask/frame so the website
-              // finishes rendering the close button first.
-              queueMicrotask(runCleanup);
+              /*
+              * Run immediately after the current DOM mutation batch.
+              *
+              * We intentionally do NOT wait for the close button.
+              * The popup itself can be hidden now.
+              */
+              queueMicrotask(
+                runCleanup
+              );
             }
           }
         );
@@ -781,6 +1211,49 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
     popupObserver = null;
     popupCleanupInProgress = false;
+  }
+
+  /**
+   * Restore any popup elements that were temporarily hidden.
+   */
+  function restoreTemporarilyHiddenPopups() {
+    if (
+      !RESTORE_HIDDEN_POPUPS ||
+      temporarilyHiddenPopupElements.size === 0
+    ) {
+      return;
+    }
+
+    for (
+      const [
+        element,
+        original
+      ] of temporarilyHiddenPopupElements
+    ) {
+      try {
+        element.style.visibility =
+          original.visibility || '';
+
+        element.style.opacity =
+          original.opacity || '';
+
+        element.style.pointerEvents =
+          original.pointerEvents || '';
+
+      } catch {
+        // Website may have removed the popup.
+      }
+    }
+
+    console.log(
+      '[PCT] RESTORED TEMPORARILY HIDDEN POPUPS',
+      {
+        restored:
+          temporarilyHiddenPopupElements.size
+      }
+    );
+
+    temporarilyHiddenPopupElements.clear();
   }
 
   /**
@@ -1869,22 +2342,46 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
     // MutationObserver. Do one lightweight synchronous
     // pass here as an additional safety check.
 
-    if (CLEAN_POPUPS_DURING_CAPTURE) {
+    if (
+      CLEAN_POPUPS_DURING_CAPTURE
+    ) {
+      /*
+      * First hide any newly appearing popup/backdrop.
+      * This must happen before the next screenshot.
+      */
+      const hidden =
+        hidePopupOverlaysImmediately();
+
+      /*
+      * Then try the real close button.
+      *
+      * If the website has rendered it already, click it.
+      */
       const clicked =
         closeObviousPopupButtons();
 
-      if (clicked > 0) {
+      if (
+        hidden > 0 ||
+        clicked > 0
+      ) {
         console.log(
-          '[PCT] POPUP REMOVED DURING SCROLL PASS',
+          '[PCT] POPUP CLEANUP AFTER SCROLL',
           {
+            hidden,
+            clicked,
             scrollY:
-              Math.round(window.scrollY),
-            clicked
+              Math.round(
+                window.scrollY
+              )
           }
         );
 
+        /*
+        * Only wait a tiny rendering buffer when we
+        * actually changed something.
+        */
         await delay(
-          POPUP_CLEANUP_WAIT_MS
+          POPUP_SETTLE_MAX_MS
         );
       }
     }
@@ -2283,6 +2780,8 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
       restorePersistentHeadersFooters();
 
       stopPopupCleanupObserver();
+
+      restoreTemporarilyHiddenPopups();
 
       captureSession =
         null;
@@ -3231,7 +3730,9 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
     restorePersistentHeadersFooters();
 
     stopPopupCleanupObserver();
-    
+
+    restoreTemporarilyHiddenPopups();
+
     captureSession =
       null;
   }
