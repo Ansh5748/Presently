@@ -52,15 +52,18 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
   // CAPTURE UI CLEANUP
   // ============================================================
 
-  // Small delay after closing a popup before taking a screenshot.
-  const POPUP_CLEANUP_WAIT_MS = 450;
+  // Small rendering buffer after a popup is actually closed.
+  // This is NOT a popup detection wait.
+  const POPUP_CLEANUP_WAIT_MS = 250;
 
-  // Give delayed popups a short window to appear before the
-  // first screenshot is taken.
-  const POPUP_DETECTION_WINDOW_MS = 2000;
+  // MutationObserver watches the page continuously.
+  // We do not intentionally wait 2-5 seconds for a popup.
+  const POPUP_OBSERVER_ENABLED = true;
 
-  // How often we check for a popup close button.
-  const POPUP_POLL_MS = 100;
+  // Maximum time after clicking/hiding a popup before capture
+  // continues normally. Kept very small so popup handling does
+  // not materially slow screenshots.
+  const POPUP_SETTLE_MAX_MS = 300;
 
   // Do not aggressively remove arbitrary fixed elements.
   // Only high-confidence header/footer candidates are hidden.
@@ -445,6 +448,9 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
   let captureUiCleanupState = null;
 
+  let popupObserver = null;
+
+  let popupCleanupInProgress = false;
 
   /**
    * Returns the visible text of an element.
@@ -596,6 +602,186 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
     return clicked;
   }
 
+  /**
+   * Start an always-on popup cleanup observer for the current
+   * capture session.
+   *
+   * Important:
+   * - Does NOT block scrolling.
+   * - Does NOT wait 2-5 seconds.
+   * - Runs whenever the website adds/changes DOM elements.
+   * - Tries the real close button first.
+   */
+  function startPopupCleanupObserver() {
+    if (
+      !POPUP_OBSERVER_ENABLED ||
+      popupObserver
+    ) {
+      return;
+    }
+
+    console.log(
+      '[PCT] POPUP OBSERVER STARTING'
+    );
+
+    const runCleanup = () => {
+      if (
+        popupCleanupInProgress ||
+        !captureSession ||
+        captureSession.cancelled
+      ) {
+        return;
+      }
+
+      popupCleanupInProgress = true;
+
+      try {
+        const clicked =
+          closeObviousPopupButtons();
+
+        if (clicked > 0) {
+          console.log(
+            '[PCT] POPUP OBSERVER CLOSED POPUP',
+            {
+              clicked,
+              scrollY:
+                Math.round(window.scrollY)
+            }
+          );
+        }
+      } catch (error) {
+        console.warn(
+          '[PCT] POPUP OBSERVER CLEANUP ERROR',
+          error
+        );
+      } finally {
+        popupCleanupInProgress = false;
+      }
+    };
+
+    try {
+      popupObserver =
+        new MutationObserver(
+          mutations => {
+            if (
+              !captureSession ||
+              captureSession.cancelled
+            ) {
+              return;
+            }
+
+            let relevantChange = false;
+
+            for (
+              const mutation of mutations
+            ) {
+              if (
+                mutation.type === 'childList' &&
+                (
+                  mutation.addedNodes?.length ||
+                  mutation.removedNodes?.length
+                )
+              ) {
+                relevantChange = true;
+                break;
+              }
+
+              if (
+                mutation.type === 'attributes' &&
+                (
+                  mutation.attributeName ===
+                    'class' ||
+                  mutation.attributeName ===
+                    'style' ||
+                  mutation.attributeName ===
+                    'aria-label' ||
+                  mutation.attributeName ===
+                    'title'
+                )
+              ) {
+                relevantChange = true;
+                break;
+              }
+            }
+
+            if (relevantChange) {
+              // Run in the next microtask/frame so the website
+              // finishes rendering the close button first.
+              queueMicrotask(runCleanup);
+            }
+          }
+        );
+
+      const observerTarget =
+        document.documentElement ||
+        document.body;
+
+      if (!observerTarget) {
+        console.warn(
+          '[PCT] POPUP OBSERVER NO TARGET'
+        );
+
+        popupObserver = null;
+        return;
+      }
+
+      popupObserver.observe(
+        observerTarget,
+        {
+          subtree: true,
+          childList: true,
+          attributes: true,
+          attributeFilter: [
+            'class',
+            'style',
+            'aria-label',
+            'title'
+          ]
+        }
+      );
+
+      // One immediate pass for a popup that already exists.
+      runCleanup();
+
+      console.log(
+        '[PCT] POPUP OBSERVER ACTIVE'
+      );
+
+    } catch (error) {
+      console.error(
+        '[PCT] POPUP OBSERVER START FAILED',
+        error
+      );
+
+      popupObserver = null;
+    }
+  }
+
+  /**
+   * Stop popup observation when capture finishes/cancels.
+   */
+  function stopPopupCleanupObserver() {
+    if (!popupObserver) {
+      return;
+    }
+
+    try {
+      popupObserver.disconnect();
+
+      console.log(
+        '[PCT] POPUP OBSERVER STOPPED'
+      );
+
+    } catch (error) {
+      console.warn(
+        '[PCT] POPUP OBSERVER STOP FAILED',
+        error
+      );
+    }
+
+    popupObserver = null;
+    popupCleanupInProgress = false;
+  }
 
   /**
    * Score an element as a likely persistent header/footer.
@@ -746,7 +932,7 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
    */
   function hidePersistentHeadersFooters() {
     if (!ENABLE_FIXED_HEADER_FOOTER_CLEANUP) {
-      return;
+      return 0;
     }
 
     if (!captureUiCleanupState) {
@@ -764,6 +950,7 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
         );
 
       let hiddenCount = 0;
+      let topHeaderHeight = 0;
 
       for (const element of allElements) {
         if (
@@ -806,6 +993,24 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
           originalVisibility
         });
 
+        const rect =
+          element.getBoundingClientRect();
+
+        const isTopHeader =
+          rect.top <= 8 &&
+          rect.height > 0 &&
+          rect.height <= 180 &&
+          rect.width >=
+            window.innerWidth * 0.50;
+
+        if (
+          isTopHeader &&
+          rect.height > topHeaderHeight
+        ) {
+          topHeaderHeight =
+            Math.round(rect.height);
+        }
+
         element.style.setProperty(
           'visibility',
           'hidden',
@@ -838,9 +1043,11 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
       console.log(
         '[PCT] PERSISTENT UI CLEANUP COMPLETE',
         {
-          hiddenCount
+          hiddenCount,
+          topHeaderHeight
         }
       );
+      return topHeaderHeight; 
     } catch (error) {
       console.warn(
         '[PCT] Persistent UI cleanup failed:',
@@ -895,91 +1102,60 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
       console.log(
         '[PCT] INITIAL POPUP CHECK START',
         {
-          scrollY: Math.round(window.scrollY)
+          scrollY:
+            Math.round(window.scrollY)
         }
       );
 
-      const startedAt = Date.now();
+      if (
+        !captureSession ||
+        captureSession.cancelled
+      ) {
+        return;
+      }
 
-      // ----------------------------------------------------------
-      // Check immediately first.
-      // ----------------------------------------------------------
+      // Start continuous popup monitoring.
+      // This does not block the first screenshot.
+      startPopupCleanupObserver();
 
-      let clicked =
+      // Immediate synchronous check for popups
+      // that already exist.
+      const clicked =
         closeObviousPopupButtons();
 
       if (clicked > 0) {
-        await delay(
-          POPUP_CLEANUP_WAIT_MS
-        );
-
         console.log(
-          '[PCT] POPUP FOUND AND CLOSED IMMEDIATELY',
+          '[PCT] EXISTING POPUP CLOSED IMMEDIATELY',
           {
             clicked
           }
         );
 
-        return;
-      }
-
-      // ----------------------------------------------------------
-      // Some websites show the popup a little later.
-      //
-      // Keep watching briefly for its close button.
-      // ----------------------------------------------------------
-
-      while (
-        Date.now() - startedAt <
-        POPUP_DETECTION_WINDOW_MS
-      ) {
-
         await delay(
-          POPUP_POLL_MS
+          POPUP_CLEANUP_WAIT_MS
         );
-
-        if (
-          !captureSession ||
-          captureSession.cancelled
-        ) {
-          return;
-        }
-
-        clicked =
-          closeObviousPopupButtons();
-
-        if (clicked > 0) {
-          await delay(
-            POPUP_CLEANUP_WAIT_MS
-          );
-
-          console.log(
-            '[PCT] DELAYED POPUP FOUND AND CLOSED',
-            {
-              waitedMs:
-                Date.now() - startedAt,
-
-              clicked
-            }
-          );
-
-          return;
-        }
+      } else {
+        console.log(
+          '[PCT] NO EXISTING POPUP - NO POPUP WAIT'
+        );
       }
 
       console.log(
-        '[PCT] NO POPUP CLOSE BUTTON FOUND - CONTINUING',
+        '[PCT] INITIAL POPUP PREPARATION COMPLETE',
         {
-          waitedMs:
-            Date.now() - startedAt
+          scrollY:
+            Math.round(window.scrollY)
         }
       );
 
-      // ----------------------------------------------------------
-      // DO NOT hide the header here.
+      // IMPORTANT:
+      // We intentionally do not wait for delayed popups here.
       //
-      // The first viewport must contain the real website header.
-      // ----------------------------------------------------------
+      // MutationObserver will close their close button as soon
+      // as the website inserts/renders it.
+      //
+      // This prevents a 2-5 second artificial delay before
+      // every capture.
     }
 
   // ============================================================
@@ -1051,6 +1227,10 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
         captureInFlight: false,
 
         lastRequestedY: null,
+
+        firstScrollDone: false,
+
+        firstScrollAdjustment: 0,
 
         startedAt:
           Date.now(),
@@ -1458,7 +1638,29 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
         '[PCT] FIRST TILE CAPTURED - NOW HIDING PERSISTENT HEADER/FOOTER'
       );
 
-      hidePersistentHeadersFooters();
+      const hiddenHeaderHeight =
+        hidePersistentHeadersFooters();
+
+      captureSession.firstScrollAdjustment =
+        Math.max(
+          0,
+          Math.round(
+            hiddenHeaderHeight || 0
+          )
+        );
+
+      captureSession.firstScrollDone =
+        false;
+
+      console.log(
+        '[PCT] FIRST SCROLL ADJUSTMENT READY',
+        {
+          hiddenHeaderHeight:
+            captureSession.firstScrollAdjustment,
+          viewportHeight:
+            window.innerHeight
+        }
+      );
     }
 
 
@@ -1547,14 +1749,57 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
       );
 
 
-    const step =
-      Math.max(
-        300,
-        Math.floor(
-          viewportHeight *
-          SCROLL_RATIO
-        )
+    let step;
+
+    const isFirstPostHeaderScroll =
+      captureSession.tiles.length === 1 &&
+      !captureSession.firstScrollDone;
+
+    if (
+      isFirstPostHeaderScroll
+    ) {
+      step =
+        Math.max(
+          300,
+          Math.floor(
+            viewportHeight -
+            captureSession.firstScrollAdjustment
+          )
+        );
+
+      captureSession.firstScrollDone =
+        true;
+
+      console.log(
+        '[PCT] FIRST POST-HEADER SCROLL',
+        {
+          viewportHeight,
+          headerHeight:
+            captureSession.firstScrollAdjustment,
+          step
+        }
       );
+
+    } else {
+      step =
+        Math.max(
+          300,
+          Math.floor(
+            viewportHeight *
+            SCROLL_RATIO
+          )
+        );
+
+      console.log(
+        '[PCT] NORMAL VIEWPORT SCROLL',
+        {
+          viewportHeight,
+          step,
+          ratio:
+            SCROLL_RATIO
+        }
+      );
+    }
 
 
     let nextY =
@@ -1620,26 +1865,26 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
       }
     );
 
-    // --------------------------------------------------------
-    // Check for popups that appeared after scrolling.
-    // --------------------------------------------------------
+    // Popup cleanup is now handled continuously by
+    // MutationObserver. Do one lightweight synchronous
+    // pass here as an additional safety check.
 
     if (CLEAN_POPUPS_DURING_CAPTURE) {
       const clicked =
         closeObviousPopupButtons();
 
       if (clicked > 0) {
-        await delay(
-          POPUP_CLEANUP_WAIT_MS
-        );
-
         console.log(
-          '[PCT] POPUP REMOVED AFTER SCROLL',
+          '[PCT] POPUP REMOVED DURING SCROLL PASS',
           {
             scrollY:
               Math.round(window.scrollY),
             clicked
           }
+        );
+
+        await delay(
+          POPUP_CLEANUP_WAIT_MS
         );
       }
     }
@@ -2036,6 +2281,8 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
       removeFreezeStyle();
 
       restorePersistentHeadersFooters();
+
+      stopPopupCleanupObserver();
 
       captureSession =
         null;
@@ -2983,6 +3230,8 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
     restorePersistentHeadersFooters();
 
+    stopPopupCleanupObserver();
+    
     captureSession =
       null;
   }
