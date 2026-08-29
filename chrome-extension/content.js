@@ -35,7 +35,7 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
   // Scroll approximately 88% of viewport.
   // This keeps enough overlap for stitching.
-  const SCROLL_RATIO = 0.88;
+  const SCROLL_RATIO = 1.0;
 
 
   // Wait after every scroll.
@@ -47,6 +47,27 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
   // Important for ecommerce / lazy-loaded pages.
   const BOTTOM_WAIT_MS = 1800;
 
+
+  // ============================================================
+  // CAPTURE UI CLEANUP
+  // ============================================================
+
+  // Small delay after closing a popup before taking a screenshot.
+  const POPUP_CLEANUP_WAIT_MS = 450;
+
+  // Give delayed popups a short window to appear before the
+  // first screenshot is taken.
+  const POPUP_DETECTION_WINDOW_MS = 2000;
+
+  // How often we check for a popup close button.
+  const POPUP_POLL_MS = 100;
+
+  // Do not aggressively remove arbitrary fixed elements.
+  // Only high-confidence header/footer candidates are hidden.
+  const ENABLE_FIXED_HEADER_FOOTER_CLEANUP = true;
+
+  // Run popup cleanup before every viewport capture.
+  const CLEAN_POPUPS_DURING_CAPTURE = true;
 
   // Maximum number of times we allow the page
   // to grow while sitting at the bottom.
@@ -419,6 +440,549 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
 
   // ============================================================
+  // CAPTURE UI CLEANUP
+  // ============================================================
+
+  let captureUiCleanupState = null;
+
+
+  /**
+   * Returns the visible text of an element.
+   */
+  function getElementText(element) {
+    try {
+      return (
+        element.innerText ||
+        element.textContent ||
+        ''
+      )
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+    } catch {
+      return '';
+    }
+  }
+
+
+  /**
+   * Returns whether an element is currently visible.
+   */
+  function isElementVisible(element) {
+    try {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return (
+        rect.width > 10 &&
+        rect.height > 10 &&
+        style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        parseFloat(style.opacity || '1') > 0 &&
+        rect.bottom > 0 &&
+        rect.right > 0 &&
+        rect.top < window.innerHeight &&
+        rect.left < window.innerWidth
+      );
+    } catch {
+      return false;
+    }
+  }
+
+
+  /**
+   * Try to identify and click an obvious popup/banner close button.
+   *
+   * We intentionally do NOT remove arbitrary elements.
+   * Clicking a real close button is safer for the website.
+   */
+  function closeObviousPopupButtons() {
+    if (!CLEAN_POPUPS_DURING_CAPTURE) {
+      return 0;
+    }
+
+    let clicked = 0;
+
+    try {
+      const elements = Array.from(
+        document.querySelectorAll(
+          'button, [role="button"], a, input[type="button"], input[type="submit"]'
+        )
+      );
+
+      const closeTextRegex =
+        /^(×|✕|✖|x|close|dismiss|cancel|no thanks|no thank you|not now|maybe later|skip|got it|continue without|decline|reject)$/i;
+
+      const ariaRegex =
+        /(close|dismiss|cancel|no thanks|not now|skip)/i;
+
+      for (const element of elements) {
+        if (!isElementVisible(element)) {
+          continue;
+        }
+
+        const text = getElementText(element);
+
+        const aria =
+          (
+            element.getAttribute('aria-label') ||
+            element.getAttribute('title') ||
+            ''
+          ).trim();
+
+        const looksLikeCloseText =
+          closeTextRegex.test(text);
+
+        const looksLikeCloseAria =
+          ariaRegex.test(aria);
+
+        /*
+        * Only consider small controls.
+        *
+        * This avoids accidentally clicking large CTA buttons
+        * such as "Shop Now", "Buy Now", etc.
+        */
+        const rect =
+          element.getBoundingClientRect();
+
+        const isSmallControl =
+          rect.width <= 180 &&
+          rect.height <= 100;
+
+        if (
+          isSmallControl &&
+          (
+            looksLikeCloseText ||
+            looksLikeCloseAria
+          )
+        ) {
+          try {
+            console.log(
+              '[PCT] POPUP CLOSE BUTTON CLICK',
+              {
+                text,
+                aria,
+                width: Math.round(rect.width),
+                height: Math.round(rect.height)
+              }
+            );
+
+            element.click();
+
+            clicked++;
+
+            /*
+            * Don't click dozens of unrelated buttons.
+            * A few obvious dismiss controls are enough.
+            */
+            if (clicked >= 5) {
+              break;
+            }
+          } catch (error) {
+            console.warn(
+              '[PCT] Popup close click failed:',
+              error
+            );
+          }
+        }
+      }
+    } catch (error) {
+      console.warn(
+        '[PCT] Popup detection failed:',
+        error
+      );
+    }
+
+    return clicked;
+  }
+
+
+  /**
+   * Score an element as a likely persistent header/footer.
+   *
+   * We are deliberately conservative.
+   */
+  function scorePersistentChrome(element) {
+    try {
+      if (!isElementVisible(element)) {
+        return 0;
+      }
+
+      const style =
+        window.getComputedStyle(element);
+
+      const rect =
+        element.getBoundingClientRect();
+
+      const position =
+        style.position;
+
+      if (
+        position !== 'fixed' &&
+        position !== 'sticky'
+      ) {
+        return 0;
+      }
+
+      const viewportWidth =
+        window.innerWidth;
+
+      const viewportHeight =
+        window.innerHeight;
+
+      let score = 0;
+
+      const widthRatio =
+        rect.width / Math.max(1, viewportWidth);
+
+      const heightRatio =
+        rect.height / Math.max(1, viewportHeight);
+
+      const topDistance =
+        Math.abs(rect.top);
+
+      const bottomDistance =
+        Math.abs(
+          viewportHeight - rect.bottom
+        );
+
+      const text =
+        getElementText(element);
+
+      const className =
+        typeof element.className === 'string'
+          ? element.className.toLowerCase()
+          : '';
+
+      const id =
+        (
+          element.id ||
+          ''
+        ).toLowerCase();
+
+      /*
+      * Must span a substantial part of the viewport.
+      */
+      if (widthRatio >= 0.70) {
+        score += 3;
+      } else if (widthRatio >= 0.50) {
+        score += 1;
+      }
+
+      /*
+      * A header/footer is normally relatively short.
+      */
+      if (heightRatio <= 0.30) {
+        score += 2;
+      }
+
+      /*
+      * Top fixed/sticky element.
+      */
+      if (
+        topDistance <= 8 &&
+        rect.height <= 180
+      ) {
+        score += 4;
+      }
+
+      /*
+      * Bottom fixed/sticky element.
+      */
+      if (
+        bottomDistance <= 8 &&
+        rect.height <= 180
+      ) {
+        score += 4;
+      }
+
+      /*
+      * Navigation/header/footer terminology.
+      */
+      if (
+        /(header|navbar|nav-bar|navigation|site-header|main-header|sticky-header|footer|bottom-bar)/i
+          .test(`${id} ${className}`)
+      ) {
+        score += 3;
+      }
+
+      /*
+      * Navigation-like content.
+      */
+      if (
+        /(menu|home|shop|account|cart|search|contact|about)/i
+          .test(text)
+      ) {
+        score += 1;
+      }
+
+      /*
+      * Don't classify giant full-screen modals as headers.
+      */
+      if (
+        widthRatio >= 0.90 &&
+        heightRatio >= 0.70
+      ) {
+        return 0;
+      }
+
+      return score;
+    } catch {
+      return 0;
+    }
+  }
+
+
+  /**
+   * Temporarily hide persistent fixed/sticky header/footer elements.
+   *
+   * We use visibility:hidden rather than display:none.
+   *
+   * This is critical:
+   * display:none can change document layout and therefore
+   * change scroll positions.
+   *
+   * visibility:hidden keeps the exact layout dimensions.
+   */
+  function hidePersistentHeadersFooters() {
+    if (!ENABLE_FIXED_HEADER_FOOTER_CLEANUP) {
+      return;
+    }
+
+    if (!captureUiCleanupState) {
+      captureUiCleanupState = {
+        hiddenElements: []
+      };
+    }
+
+    try {
+      const allElements =
+        Array.from(
+          document.querySelectorAll(
+            'body *'
+          )
+        );
+
+      let hiddenCount = 0;
+
+      for (const element of allElements) {
+        if (
+          captureUiCleanupState.hiddenElements
+            .some(item => item.element === element)
+        ) {
+          continue;
+        }
+
+        const score =
+          scorePersistentChrome(element);
+
+        /*
+        * High-confidence only.
+        *
+        * We require a reasonably strong score so that ordinary
+        * fixed chat buttons and content aren't accidentally hidden.
+        */
+        if (score < 7) {
+          continue;
+        }
+
+        const style =
+          window.getComputedStyle(element);
+
+        const originalVisibility =
+          element.style.visibility;
+
+        /*
+        * Don't override an element that is already hidden.
+        */
+        if (
+          style.visibility === 'hidden'
+        ) {
+          continue;
+        }
+
+        captureUiCleanupState.hiddenElements.push({
+          element,
+          originalVisibility
+        });
+
+        element.style.setProperty(
+          'visibility',
+          'hidden',
+          'important'
+        );
+
+        hiddenCount++;
+
+        console.log(
+          '[PCT] HIDING PERSISTENT HEADER/FOOTER',
+          {
+            tag: element.tagName,
+            id: element.id,
+            className:
+              typeof element.className === 'string'
+                ? element.className
+                : '',
+            score
+          }
+        );
+
+        /*
+        * Don't hide hundreds of elements on a badly structured site.
+        */
+        if (hiddenCount >= 10) {
+          break;
+        }
+      }
+
+      console.log(
+        '[PCT] PERSISTENT UI CLEANUP COMPLETE',
+        {
+          hiddenCount
+        }
+      );
+    } catch (error) {
+      console.warn(
+        '[PCT] Persistent UI cleanup failed:',
+        error
+      );
+    }
+  }
+
+  /**
+   * Restore every element changed by the capture cleanup.
+   */
+  function restorePersistentHeadersFooters() {
+    if (!captureUiCleanupState) {
+      return;
+    }
+
+    try {
+      for (
+        const item of
+        captureUiCleanupState.hiddenElements
+      ) {
+        try {
+          item.element.style.visibility =
+            item.originalVisibility || '';
+        } catch {
+          // Element may have been removed by the website.
+        }
+      }
+
+      console.log(
+        '[PCT] RESTORED PERSISTENT HEADER/FOOTER UI',
+        {
+          restored:
+            captureUiCleanupState.hiddenElements.length
+        }
+      );
+    } catch (error) {
+      console.warn(
+        '[PCT] Failed restoring persistent UI:',
+        error
+      );
+    }
+
+    captureUiCleanupState = null;
+  }
+
+
+  /**
+   * Complete UI cleanup pass.
+   */
+    async function preparePageForCapture() {
+      console.log(
+        '[PCT] INITIAL POPUP CHECK START',
+        {
+          scrollY: Math.round(window.scrollY)
+        }
+      );
+
+      const startedAt = Date.now();
+
+      // ----------------------------------------------------------
+      // Check immediately first.
+      // ----------------------------------------------------------
+
+      let clicked =
+        closeObviousPopupButtons();
+
+      if (clicked > 0) {
+        await delay(
+          POPUP_CLEANUP_WAIT_MS
+        );
+
+        console.log(
+          '[PCT] POPUP FOUND AND CLOSED IMMEDIATELY',
+          {
+            clicked
+          }
+        );
+
+        return;
+      }
+
+      // ----------------------------------------------------------
+      // Some websites show the popup a little later.
+      //
+      // Keep watching briefly for its close button.
+      // ----------------------------------------------------------
+
+      while (
+        Date.now() - startedAt <
+        POPUP_DETECTION_WINDOW_MS
+      ) {
+
+        await delay(
+          POPUP_POLL_MS
+        );
+
+        if (
+          !captureSession ||
+          captureSession.cancelled
+        ) {
+          return;
+        }
+
+        clicked =
+          closeObviousPopupButtons();
+
+        if (clicked > 0) {
+          await delay(
+            POPUP_CLEANUP_WAIT_MS
+          );
+
+          console.log(
+            '[PCT] DELAYED POPUP FOUND AND CLOSED',
+            {
+              waitedMs:
+                Date.now() - startedAt,
+
+              clicked
+            }
+          );
+
+          return;
+        }
+      }
+
+      console.log(
+        '[PCT] NO POPUP CLOSE BUTTON FOUND - CONTINUING',
+        {
+          waitedMs:
+            Date.now() - startedAt
+        }
+      );
+
+      // ----------------------------------------------------------
+      // DO NOT hide the header here.
+      //
+      // The first viewport must contain the real website header.
+      // ----------------------------------------------------------
+    }
+
+  // ============================================================
   // START REAL CAPTURE
   // ============================================================
 
@@ -537,7 +1101,6 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
         style
       );
 
-
       // --------------------------------------------------------
       // ALWAYS START FROM TOP.
       // --------------------------------------------------------
@@ -545,7 +1108,6 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
       console.log(
         '[PCT] E2 SCROLLING TO Y=0'
       );
-
 
       window.scrollTo(
         {
@@ -555,11 +1117,9 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
         }
       );
 
-
       await delay(
         INITIAL_SETTLE_MS
       );
-
 
       if (
         !captureSession ||
@@ -568,22 +1128,24 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
         return;
       }
 
-
-      // --------------------------------------------------------
-      // Force a second top position.
-      //
-      // Some websites restore scroll position after load.
-      // --------------------------------------------------------
-
+      // Some websites restore the scroll position after load.
+      // Force top again.
       window.scrollTo(
         0,
         0
       );
 
-
       await delay(
         100
       );
+
+      // --------------------------------------------------------
+      // NOW check for popup.
+      //
+      // Header is still visible.
+      // --------------------------------------------------------
+
+      await preparePageForCapture();
 
 
       console.log(
@@ -603,7 +1165,15 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
       // --------------------------------------------------------
       // FIRST SCREENSHOT.
+      //
+      // IMPORTANT:
+      // The first viewport MUST contain the normal website header.
+      // Popup/banner has already been closed above.
       // --------------------------------------------------------
+
+      console.log(
+        '[PCT] FIRST VIEWPORT - HEADER STILL VISIBLE'
+      );
 
       requestCurrentViewport();
 
@@ -871,6 +1441,26 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
       }
     );
 
+    // ----------------------------------------------------------
+    // FIRST TILE COMPLETE.
+    //
+    // The first screenshot has now definitely been captured
+    // with the real website header visible.
+    //
+    // ONLY NOW hide the persistent header/footer so it does not
+    // repeat in the following viewport screenshots.
+    // ----------------------------------------------------------
+
+    if (
+      captureSession.tiles.length === 1
+    ) {
+      console.log(
+        '[PCT] FIRST TILE CAPTURED - NOW HIDING PERSISTENT HEADER/FOOTER'
+      );
+
+      hidePersistentHeadersFooters();
+    }
+
 
     // ----------------------------------------------------------
     // Check if this was the final bottom tile
@@ -1030,6 +1620,29 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
       }
     );
 
+    // --------------------------------------------------------
+    // Check for popups that appeared after scrolling.
+    // --------------------------------------------------------
+
+    if (CLEAN_POPUPS_DURING_CAPTURE) {
+      const clicked =
+        closeObviousPopupButtons();
+
+      if (clicked > 0) {
+        await delay(
+          POPUP_CLEANUP_WAIT_MS
+        );
+
+        console.log(
+          '[PCT] POPUP REMOVED AFTER SCROLL',
+          {
+            scrollY:
+              Math.round(window.scrollY),
+            clicked
+          }
+        );
+      }
+    }
 
     // ----------------------------------------------------------
     // Wait for lazy content.
@@ -1422,6 +2035,7 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
       removeFreezeStyle();
 
+      restorePersistentHeadersFooters();
 
       captureSession =
         null;
@@ -1719,35 +2333,69 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
 
     // ----------------------------------------------------------
-    // Draw every screenshot tile sequentially to optimize memory.
+    // Draw screenshot tiles sequentially.
+    //
+    // IMPORTANT:
+    // If the final bottom screenshot has the same scrollY as the
+    // previous screenshot, keep only the latest screenshot.
+    //
+    // For normal tiles, use the exact scroll distance between
+    // screenshots so no overlapping pixels are stitched twice.
     // ----------------------------------------------------------
 
-    for (
-      let i = 0;
-      i < tiles.length;
-      i++
-    ) {
+    const uniqueTilesByScrollY =
+      new Map();
 
-      const tile =
-        tiles[i];
-
-
+    for (const tile of tiles) {
       if (
         !tile ||
         !tile.image
       ) {
-
-        console.warn(
-          '[PCT] SKIPPING INVALID TILE',
-          i
-        );
-
         continue;
       }
 
+      uniqueTilesByScrollY.set(
+        Number(tile.scrollY || 0),
+        tile
+      );
+    }
 
-      const image = (i === 0) ? firstImage : await loadImage(tile.image);
+    const stitchTilesList =
+      Array.from(
+        uniqueTilesByScrollY.values()
+      ).sort(
+        (a, b) =>
+          Number(a.scrollY || 0) -
+          Number(b.scrollY || 0)
+      );
 
+    console.log(
+      '[PCT] STITCH UNIQUE TILES',
+      {
+        originalTileCount:
+          tiles.length,
+
+        uniqueTileCount:
+          stitchTilesList.length
+      }
+    );
+
+
+    for (
+      let i = 0;
+      i < stitchTilesList.length;
+      i++
+    ) {
+
+      const tile =
+        stitchTilesList[i];
+
+      const image =
+        (i === 0)
+          ? firstImage
+          : await loadImage(
+              tile.image
+            );
 
       if (
         !image ||
@@ -1764,15 +2412,131 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
       }
 
 
-      // scrollY is CSS pixels.
-      // Screenshot dimensions are physical pixels.
-      // Convert using DPR and final scale.
+      // --------------------------------------------------------
+      // Current and previous scroll positions in CSS pixels.
+      // --------------------------------------------------------
+
+      const currentScrollY =
+        Number(
+          tile.scrollY || 0
+        );
+
+      const previousScrollY =
+        i === 0
+          ? 0
+          : Number(
+              stitchTilesList[i - 1].scrollY || 0
+            );
+
+
+      // --------------------------------------------------------
+      // Screenshot viewport height in CSS pixels.
+      // --------------------------------------------------------
+
+      const viewportCssHeight =
+        image.naturalHeight /
+        dpr;
+
+
+      // --------------------------------------------------------
+      // Determine how much of this screenshot is NEW.
+      //
+      // Normal tile:
+      //
+      // previous Y = 800
+      // current Y  = 1600
+      // delta      = 800
+      //
+      // Final overlapping tile:
+      //
+      // previous Y = 1600
+      // current Y  = 1700
+      // delta      = 100
+      //
+      // We only stitch the new 100px.
+      // --------------------------------------------------------
+
+      const scrollDeltaCss =
+        i === 0
+          ? viewportCssHeight
+          : Math.max(
+              0,
+              currentScrollY -
+              previousScrollY
+            );
+
+
+      if (
+        scrollDeltaCss <= 0
+      ) {
+
+        console.log(
+          '[PCT] SKIPPING ZERO-DELTA TILE',
+          {
+            index:
+              i + 1,
+
+            scrollY:
+              currentScrollY
+          }
+        );
+
+        continue;
+      }
+
+
+      // --------------------------------------------------------
+      // Source crop.
+      //
+      // If the scroll delta is smaller than the viewport,
+      // the top part overlaps the previous screenshot.
+      // Skip that overlapping source area.
+      // --------------------------------------------------------
+
+      const sourceYCss =
+        Math.max(
+          0,
+          viewportCssHeight -
+          scrollDeltaCss
+        );
+
+      const sourceY =
+        Math.round(
+          sourceYCss *
+          dpr
+        );
+
+      const sourceHeight =
+        Math.min(
+          image.naturalHeight -
+          sourceY,
+
+          Math.round(
+            scrollDeltaCss *
+            dpr
+          )
+        );
+
+
+      if (
+        sourceHeight <= 0
+      ) {
+        continue;
+      }
+
+
+      // --------------------------------------------------------
+      // Destination position.
+      //
+      // The cropped content starts immediately after the
+      // previous screenshot's already stitched content.
+      // --------------------------------------------------------
 
       const destinationY =
         Math.round(
-          Number(
-            tile.scrollY ||
-            0
+          (
+            currentScrollY +
+            sourceYCss
           ) *
           dpr *
           scale
@@ -1788,7 +2552,7 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
       const destinationHeight =
         Math.round(
-          image.naturalHeight *
+          sourceHeight *
           scale
         );
 
@@ -1797,7 +2561,6 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
         destinationY >=
         outputHeight
       ) {
-
         continue;
       }
 
@@ -1812,22 +2575,24 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
 
       if (
-        visibleHeight <=
-        0
+        visibleHeight <= 0
       ) {
-
         continue;
       }
 
+
+      // --------------------------------------------------------
+      // Draw only the NEW portion.
+      // --------------------------------------------------------
 
       ctx.drawImage(
         image,
 
         0,
-        0,
+        sourceY,
 
         image.naturalWidth,
-        image.naturalHeight,
+        sourceHeight,
 
         0,
         destinationY,
@@ -1844,23 +2609,31 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
             i + 1,
 
           total:
-            tiles.length,
+            stitchTilesList.length,
 
           scrollY:
-            tile.scrollY,
+            currentScrollY,
 
-          destinationY
+          previousScrollY,
+
+          scrollDeltaCss,
+
+          sourceYCss,
+
+          sourceHeight,
+
+          destinationY,
+
+          visibleHeight
         }
       );
 
 
       // Give browser event loop a chance.
-
       if (
         i % 3 ===
         0
       ) {
-
         await delay(
           0
         );
@@ -2208,6 +2981,7 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
     removeFreezeStyle();
 
+    restorePersistentHeadersFooters();
 
     captureSession =
       null;
