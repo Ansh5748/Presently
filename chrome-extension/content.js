@@ -913,6 +913,558 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
     }
 
     /**
+     * ============================================================
+     * IMMEDIATE POPUP BACKDROP SUPPRESSION
+     * ============================================================
+     *
+     * Some websites render:
+     *
+     *   backdrop/scrim
+     *        +
+     *   popup/dialog
+     *
+     * as two separate elements.
+     *
+     * The popup may disappear while the backdrop remains visible.
+     *
+     * This function specifically looks for full-viewport fixed/
+     * absolute dark overlays and hides them immediately.
+     *
+     * IMPORTANT:
+     * - No waiting.
+     * - No scrolling delay.
+     * - Does NOT click anything.
+     * - Does NOT hide normal page content.
+     */
+    function hidePopupBackdropsImmediately() {
+      if (
+        !HIDE_POPUP_BEFORE_CLOSE_BUTTON ||
+        !captureSession ||
+        captureSession.cancelled
+      ) {
+        return 0;
+      }
+
+      let hidden = 0;
+
+      try {
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+
+        const elements = Array.from(
+          document.querySelectorAll('body *')
+        );
+
+        /*
+        * ------------------------------------------------------------
+        * HELPER
+        * ------------------------------------------------------------
+        *
+        * Detect whether an element is visually dark/translucent.
+        */
+        const looksDarkOrTranslucent = (style) => {
+          const backgroundColor =
+            style.backgroundColor || '';
+
+          const backgroundImage =
+            style.backgroundImage || '';
+
+          const opacity =
+            parseFloat(style.opacity || '1');
+
+          /*
+          * rgba()/hsla() with alpha.
+          */
+          const rgbaMatch =
+            backgroundColor.match(
+              /rgba?\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+(?:\s*,\s*([\d.]+))?\s*\)/i
+            );
+
+          if (rgbaMatch) {
+            const alpha =
+              rgbaMatch[1] !== undefined
+                ? parseFloat(rgbaMatch[1])
+                : 1;
+
+            if (alpha > 0 && alpha < 1) {
+              return true;
+            }
+          }
+
+          /*
+          * Common black/dark backdrop colors.
+          */
+          if (
+            /rgba?\(\s*0\s*,\s*0\s*,\s*0/i.test(
+              backgroundColor
+            )
+          ) {
+            return true;
+          }
+
+          /*
+          * Gradient overlays are commonly used as backdrops.
+          */
+          if (
+            /linear-gradient|radial-gradient/i.test(
+              backgroundImage
+            )
+          ) {
+            return true;
+          }
+
+          /*
+          * Element itself is translucent.
+          */
+          if (
+            opacity > 0 &&
+            opacity < 1
+          ) {
+            return true;
+          }
+
+          return false;
+        };
+
+        /*
+        * ------------------------------------------------------------
+        * FIRST PASS
+        *
+        * Find actual full-screen overlay elements.
+        * ------------------------------------------------------------
+        */
+        for (const element of elements) {
+          try {
+            if (
+              !element ||
+              !element.isConnected ||
+              element === document.body ||
+              element === document.documentElement
+            ) {
+              continue;
+            }
+
+            const style =
+              window.getComputedStyle(element);
+
+            const rect =
+              element.getBoundingClientRect();
+
+            const position =
+              style.position;
+
+            if (
+              position !== 'fixed' &&
+              position !== 'absolute'
+            ) {
+              continue;
+            }
+
+            if (
+              rect.width < viewportWidth * 0.80 ||
+              rect.height < viewportHeight * 0.70
+            ) {
+              continue;
+            }
+
+            /*
+            * It must cover essentially the viewport.
+            */
+            const coversViewport =
+              rect.top <= 20 &&
+              rect.left <= 20 &&
+              rect.right >= viewportWidth - 20 &&
+              rect.bottom >= viewportHeight - 20;
+
+            if (!coversViewport) {
+              continue;
+            }
+
+            const identity =
+              `${element.id || ''} ${
+                typeof element.className === 'string'
+                  ? element.className
+                  : ''
+              } ${
+                element.getAttribute('role') || ''
+              } ${
+                element.getAttribute('aria-label') || ''
+              }`.toLowerCase();
+
+            const explicitBackdropName =
+              /(backdrop|back-drop|scrim|overlay|modal-overlay|popup-overlay|dialog-overlay|lightbox-overlay|drawer-overlay|modal-backdrop|popup-backdrop|shade|dimmer|mask)/i
+                .test(identity);
+
+            const darkOrTranslucent =
+              looksDarkOrTranslucent(style);
+
+            /*
+            * z-index is useful but NOT mandatory.
+            */
+            const zIndex =
+              parseInt(style.zIndex, 10);
+
+            const highZIndex =
+              Number.isFinite(zIndex) &&
+              zIndex >= POPUP_MIN_Z_INDEX;
+
+            /*
+            * Strong candidate if:
+            *
+            * 1. Explicitly named backdrop/overlay
+            * OR
+            * 2. Dark/translucent + full screen
+            * OR
+            * 3. Very high z-index + full screen
+            */
+            const isStrongBackdrop =
+              explicitBackdropName ||
+              darkOrTranslucent ||
+              highZIndex;
+
+            if (!isStrongBackdrop) {
+              continue;
+            }
+
+            /*
+            * Save original styles only once.
+            */
+            if (
+              !temporarilyHiddenPopupElements.has(
+                element
+              )
+            ) {
+              temporarilyHiddenPopupElements.set(
+                element,
+                {
+                  visibility:
+                    element.style.visibility,
+
+                  opacity:
+                    element.style.opacity,
+
+                  pointerEvents:
+                    element.style.pointerEvents
+                }
+              );
+            }
+
+            element.style.setProperty(
+              'visibility',
+              'hidden',
+              'important'
+            );
+
+            element.style.setProperty(
+              'opacity',
+              '0',
+              'important'
+            );
+
+            element.style.setProperty(
+              'pointer-events',
+              'none',
+              'important'
+            );
+
+            hidden++;
+
+            console.log(
+              '[PCT] POPUP BACKDROP HIDDEN IMMEDIATELY',
+              {
+                tag:
+                  element.tagName,
+
+                id:
+                  element.id,
+
+                className:
+                  typeof element.className === 'string'
+                    ? element.className
+                    : '',
+
+                position,
+
+                zIndex:
+                  style.zIndex,
+
+                width:
+                  Math.round(rect.width),
+
+                height:
+                  Math.round(rect.height),
+
+                top:
+                  Math.round(rect.top),
+
+                left:
+                  Math.round(rect.left),
+
+                backgroundColor:
+                  style.backgroundColor,
+
+                backgroundImage:
+                  style.backgroundImage,
+
+                opacity:
+                  style.opacity,
+
+                reason:
+                  explicitBackdropName
+                    ? 'explicit-backdrop-name'
+                    : darkOrTranslucent
+                      ? 'dark-or-translucent'
+                      : 'high-z-index'
+              }
+            );
+
+            /*
+            * Normally there is only one backdrop.
+            * Allow a few because some sites have nested overlays.
+            */
+            if (hidden >= 3) {
+              break;
+            }
+
+          } catch (elementError) {
+            console.warn(
+              '[PCT] BACKDROP ELEMENT CHECK FAILED',
+              elementError
+            );
+          }
+        }
+
+        /*
+        * ------------------------------------------------------------
+        * SECOND PASS
+        *
+        * Catch a very common case where the backdrop does not have
+        * an obvious class/name but is the topmost full-screen layer.
+        *
+        * We inspect points OUTSIDE the centered popup.
+        * ------------------------------------------------------------
+        */
+
+        const testPoints = [
+          [5, 5],
+          [viewportWidth - 5, 5],
+          [5, viewportHeight - 5],
+          [viewportWidth - 5, viewportHeight - 5],
+          [5, Math.round(viewportHeight / 2)],
+          [
+            viewportWidth - 5,
+            Math.round(viewportHeight / 2)
+          ]
+        ];
+
+        for (const [x, y] of testPoints) {
+          try {
+            const stack =
+              document.elementsFromPoint(
+                x,
+                y
+              );
+
+            for (const element of stack) {
+              if (
+                !element ||
+                element === document.body ||
+                element === document.documentElement
+              ) {
+                continue;
+              }
+
+              if (
+                temporarilyHiddenPopupElements.has(
+                  element
+                )
+              ) {
+                continue;
+              }
+
+              const style =
+                window.getComputedStyle(element);
+
+              const rect =
+                element.getBoundingClientRect();
+
+              const position =
+                style.position;
+
+              if (
+                position !== 'fixed' &&
+                position !== 'absolute'
+              ) {
+                continue;
+              }
+
+              if (
+                rect.width <
+                  viewportWidth * 0.80 ||
+                rect.height <
+                  viewportHeight * 0.70
+              ) {
+                continue;
+              }
+
+              const identity =
+                `${element.id || ''} ${
+                  typeof element.className === 'string'
+                    ? element.className
+                    : ''
+                } ${
+                  element.getAttribute('role') || ''
+                } ${
+                  element.getAttribute('aria-label') || ''
+                }`.toLowerCase();
+
+              const explicitBackdropName =
+                /(backdrop|back-drop|scrim|overlay|modal-overlay|popup-overlay|dialog-overlay|lightbox-overlay|drawer-overlay|modal-backdrop|popup-backdrop|shade|dimmer|mask)/i
+                  .test(identity);
+
+              const darkOrTranslucent =
+                looksDarkOrTranslucent(style);
+
+              const zIndex =
+                parseInt(style.zIndex, 10);
+
+              const highZIndex =
+                Number.isFinite(zIndex) &&
+                zIndex >= POPUP_MIN_Z_INDEX;
+
+              /*
+              * Only treat this as backdrop if it has a strong
+              * overlay characteristic.
+              */
+              if (
+                !explicitBackdropName &&
+                !darkOrTranslucent &&
+                !highZIndex
+              ) {
+                continue;
+              }
+
+              if (
+                !temporarilyHiddenPopupElements.has(
+                  element
+                )
+              ) {
+                temporarilyHiddenPopupElements.set(
+                  element,
+                  {
+                    visibility:
+                      element.style.visibility,
+
+                    opacity:
+                      element.style.opacity,
+
+                    pointerEvents:
+                      element.style.pointerEvents
+                  }
+                );
+              }
+
+              element.style.setProperty(
+                'visibility',
+                'hidden',
+                'important'
+              );
+
+              element.style.setProperty(
+                'opacity',
+                '0',
+                'important'
+              );
+
+              element.style.setProperty(
+                'pointer-events',
+                'none',
+                'important'
+              );
+
+              hidden++;
+
+              console.log(
+                '[PCT] TOPMOST POPUP BACKDROP HIDDEN',
+                {
+                  x,
+                  y,
+
+                  tag:
+                    element.tagName,
+
+                  id:
+                    element.id,
+
+                  className:
+                    typeof element.className === 'string'
+                      ? element.className
+                      : '',
+
+                  zIndex:
+                    style.zIndex,
+
+                  backgroundColor:
+                    style.backgroundColor,
+
+                  opacity:
+                    style.opacity
+                }
+              );
+
+              break;
+
+            }
+
+            if (hidden >= 3) {
+              break;
+            }
+
+          } catch (pointError) {
+            console.warn(
+              '[PCT] BACKDROP POINT CHECK FAILED',
+              pointError
+            );
+          }
+        }
+
+      } catch (error) {
+        console.warn(
+          '[PCT] POPUP BACKDROP SCAN FAILED',
+          error
+        );
+      }
+
+      if (hidden > 0) {
+        console.log(
+          '[PCT] POPUP BACKDROP SUPPRESSION COMPLETE',
+          {
+            hidden,
+            scrollY:
+              Math.round(
+                window.scrollY
+              )
+          }
+        );
+      } else {
+        console.log(
+          '[PCT] NO POPUP BACKDROP FOUND',
+          {
+            scrollY:
+              Math.round(
+                window.scrollY
+              ),
+
+            viewportWidth,
+            viewportHeight
+          }
+        );
+      }
+
+      return hidden;
+    }
+
+    /**
      * Find and immediately hide popup/backdrop elements.
      *
      * This is intentionally synchronous and does not wait.
@@ -1017,8 +1569,27 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
       try {
         /*
+        * STEP 1:
+        * Hide full-screen popup backdrop immediately.
+        */
+        const backdropHidden =
+          hidePopupBackdropsImmediately();
+
+        if (backdropHidden > 0) {
+          console.log(
+            '[PCT] POPUP BACKDROP HIDDEN BEFORE CLOSE BUTTON',
+            {
+              backdropHidden,
+              scrollY:
+                Math.round(
+                  window.scrollY
+                )
+            }
+          );
+        }
+        /*
         * --------------------------------------------------------
-        * STEP 1
+        * STEP 2
         *
         * Immediately hide the popup/backdrop.
         *
@@ -1047,7 +1618,7 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
         /*
         * --------------------------------------------------------
-        * STEP 2
+        * STEP 3
         *
         * Now try the real close button.
         *
@@ -1593,14 +2164,26 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
       // Immediate synchronous check for popups
       // that already exist.
+      const backdropHidden =
+        hidePopupBackdropsImmediately();
+
+      const hidden =
+        hidePopupOverlaysImmediately();
+
       const clicked =
         closeObviousPopupButtons();
 
-      if (clicked > 0) {
+      if (
+        backdropHidden > 0 ||
+        hidden > 0 ||
+        clicked > 0
+      ) {
         console.log(
           '[PCT] EXISTING POPUP CLOSED IMMEDIATELY',
           {
-            clicked
+            backdropHidden,
+            hidden,
+            clicked,  
           }
         );
 
@@ -2346,6 +2929,12 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
       CLEAN_POPUPS_DURING_CAPTURE
     ) {
       /*
+      * First hide any newly appearing popup BACKDROP.
+      */
+      const backdropHidden =
+        hidePopupBackdropsImmediately();
+
+      /*
       * First hide any newly appearing popup/backdrop.
       * This must happen before the next screenshot.
       */
@@ -2361,12 +2950,14 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
         closeObviousPopupButtons();
 
       if (
+        backdropHidden > 0 ||
         hidden > 0 ||
         clicked > 0
       ) {
         console.log(
           '[PCT] POPUP CLEANUP AFTER SCROLL',
           {
+            backdropHidden,
             hidden,
             clicked,
             scrollY:
