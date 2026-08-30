@@ -470,7 +470,7 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
       // Stop & stitch capture early on demand.
       // --------------------------------------------------------
 
-      if (
+            if (
         message.type ===
         'PRESENTLY_LIVE_CAPTURE_STOP'
       ) {
@@ -484,33 +484,69 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
           !captureSession.cancelled
         ) {
 
-          captureSession.stopRequested =
-            true;
+          /*
+           * ------------------------------------------------------
+           * STOP BEHAVIOR
+           *
+           * We want the mobile bottom navigation to appear in
+           * the final screenshot when the user manually stops.
+           *
+           * IMPORTANT:
+           * We do NOT scroll to the website footer.
+           *
+           * We simply capture the current viewport one final
+           * time after restoring the mobile bottom navigation.
+           * ------------------------------------------------------
+           */
 
-          // If a screenshot is currently in-flight,
-          // receiveCaptureTile() will finish the capture
-          // after that tile arrives.
           if (
             captureSession.captureInFlight
           ) {
 
+            /*
+             * The current screenshot has already been requested.
+             *
+             * Let that screenshot arrive first.
+             * After it arrives, we restore the mobile bottom nav
+             * and request ONE replacement screenshot at the same Y.
+             */
+            captureSession.stopRequested =
+              true;
+
+            captureSession.stopFinalTilePending =
+              true;
+
             console.log(
-              '[PCT] STOP WAITING FOR IN-FLIGHT TILE'
+              '[PCT] STOP WAITING FOR IN-FLIGHT TILE BEFORE FINAL MOBILE NAV TILE'
             );
 
           } else {
 
+            /*
+             * Nothing is currently being captured.
+             *
+             * Restore the mobile bottom navigation now and
+             * capture the current viewport once as the final tile.
+             */
+            restoreMobileBottomStickyElements();
+
+            captureSession.stopRequested =
+              false;
+
+            captureSession.stopFinalTilePending =
+              false;
+
+            captureSession.isFinalTile =
+              true;
+
+            captureSession.lastRequestedY =
+              null;
+
             console.log(
-              '[PCT] STOP - NO TILE IN FLIGHT - STITCHING NOW'
+              '[PCT] STOP - RESTORED MOBILE BOTTOM NAV - CAPTURING CURRENT VIEWPORT'
             );
 
-            finishCapture()
-              .catch(error => {
-                console.error(
-                  '[PCT] STOP FINISH CAPTURE FAILED',
-                  error
-                );
-              });
+            requestCurrentViewport();
           }
         }
 
@@ -2110,6 +2146,185 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
 
   /**
+   * Hide only mobile bottom navigation.
+   *
+   * This is called BEFORE the first screenshot so the mobile
+   * bottom navigation never appears in an intermediate tile.
+   *
+   * It is intentionally separate from the normal persistent
+   * header/footer cleanup so existing header, search and popup
+   * behavior is not changed.
+   */
+  function hideMobileBottomNavigation() {
+    if (!ENABLE_FIXED_HEADER_FOOTER_CLEANUP) {
+      return 0;
+    }
+
+    if (!captureUiCleanupState) {
+      captureUiCleanupState = {
+        hiddenElements: []
+      };
+    }
+
+    try {
+      const allElements =
+        Array.from(
+          document.querySelectorAll(
+            'body *'
+          )
+        );
+
+      let hiddenCount = 0;
+
+      for (
+        const element of allElements
+      ) {
+        /*
+        * Don't process the same element twice.
+        */
+        if (
+          captureUiCleanupState.hiddenElements
+            .some(
+              item =>
+                item.element === element
+            )
+        ) {
+          continue;
+        }
+
+        const style =
+          window.getComputedStyle(
+            element
+          );
+
+        if (
+          style.visibility ===
+          'hidden'
+        ) {
+          continue;
+        }
+
+        const rect =
+          element.getBoundingClientRect();
+
+        const viewportWidth =
+          window.innerWidth;
+
+        const viewportHeight =
+          window.innerHeight;
+
+        /*
+        * Only mobile.
+        */
+        if (
+          viewportWidth > 768
+        ) {
+          continue;
+        }
+
+        /*
+        * Must be attached to the bottom
+        * of the viewport.
+        */
+        const bottomDistance =
+          Math.abs(
+            viewportHeight -
+            rect.bottom
+          );
+
+        /*
+        * Typical mobile bottom navigation:
+        *
+        * - fixed/sticky
+        * - near viewport bottom
+        * - short
+        * - spans a substantial width
+        */
+        const isBottomSticky =
+          (
+            style.position ===
+              'fixed' ||
+            style.position ===
+              'sticky'
+          ) &&
+          bottomDistance <= 20 &&
+          rect.height > 0 &&
+          rect.height <= 180 &&
+          rect.width >=
+            viewportWidth * 0.45;
+
+        if (!isBottomSticky) {
+          continue;
+        }
+
+        const originalVisibility =
+          element.style.visibility;
+
+        captureUiCleanupState.hiddenElements
+          .push({
+            element,
+            originalVisibility,
+            isMobileBottomSticky: true
+          });
+
+        element.style.setProperty(
+          'visibility',
+          'hidden',
+          'important'
+        );
+
+        hiddenCount++;
+
+        console.log(
+          '[PCT] HID MOBILE BOTTOM NAV BEFORE FIRST TILE',
+          {
+            tag: element.tagName,
+            id: element.id,
+            className:
+              typeof element.className ===
+              'string'
+                ? element.className
+                : '',
+            width:
+              Math.round(rect.width),
+            height:
+              Math.round(rect.height),
+            position:
+              style.position
+          }
+        );
+
+        /*
+        * Prevent accidentally hiding many unrelated
+        * fixed elements.
+        */
+        if (
+          hiddenCount >= 3
+        ) {
+          break;
+        }
+      }
+
+      console.log(
+        '[PCT] MOBILE BOTTOM NAV INITIAL CLEANUP COMPLETE',
+        {
+          hiddenCount
+        }
+      );
+
+      return hiddenCount;
+
+    } catch (error) {
+      console.warn(
+        '[PCT] MOBILE BOTTOM NAV INITIAL CLEANUP FAILED',
+        error
+      );
+
+      return 0;
+    }
+  }
+
+  /**
    * Temporarily hide persistent fixed/sticky header/footer elements.
    *
    * We use visibility:hidden rather than display:none.
@@ -2503,6 +2718,11 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
         stopRequested: false,
 
+        // When STOP is pressed while a screenshot is already
+        // in flight, take one final screenshot at the same
+        // current position after restoring the mobile bottom nav.
+        stopFinalTilePending: false,
+
         captureInFlight: false,
 
         lastRequestedY: null,
@@ -2628,7 +2848,11 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
       // IMPORTANT:
       // The first viewport MUST contain the normal website header.
       // Popup/banner has already been closed above.
+      // Mobile bottom navigation is hidden BEFORE this screenshot
+      // so it appears only in the final bottom screenshot.
       // --------------------------------------------------------
+
+      hideMobileBottomNavigation();
 
       console.log(
         '[PCT] FIRST VIEWPORT - HEADER STILL VISIBLE'
@@ -2901,17 +3125,101 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
       }
     );
 
-    // ----------------------------------------------------------
+        // ----------------------------------------------------------
     // STOP REQUESTED
     //
-    // The in-flight screenshot has now arrived.
-    // Store it first, then stitch everything captured so far.
+    // If STOP happened while a screenshot was already in flight,
+    // that screenshot has now arrived.
+    //
+    // First store it.
+    // Then restore the mobile bottom navigation.
+    // Then capture the SAME viewport one final time.
     // ----------------------------------------------------------
 
     if (
       captureSession.stopRequested
     ) {
 
+      /*
+       * --------------------------------------------------------
+       * STOP + MOBILE FINAL TILE
+       *
+       * The screenshot that was already in flight is safely
+       * stored above.
+       *
+       * Now restore the mobile bottom navigation and request
+       * one more screenshot at the exact same scroll position.
+       * --------------------------------------------------------
+       */
+      if (
+        captureSession.stopFinalTilePending
+      ) {
+
+        console.log(
+          '[PCT] STOP TILE RECEIVED - RESTORING MOBILE BOTTOM NAV'
+        );
+
+        restoreMobileBottomStickyElements();
+
+        /*
+         * Allow requestCurrentViewport() to issue the
+         * replacement screenshot.
+         */
+        captureSession.stopRequested =
+          false;
+
+        captureSession.stopFinalTilePending =
+          false;
+
+        /*
+         * This second screenshot is the final STOP tile.
+         *
+         * Because it uses the same scrollY as the previous tile,
+         * stitchTiles() already keeps the latest tile for that
+         * scroll position.
+         */
+        captureSession.isFinalTile =
+          true;
+
+        captureSession.lastRequestedY =
+          null;
+
+        console.log(
+          '[PCT] STOP - CAPTURING FINAL CURRENT VIEWPORT WITH MOBILE BOTTOM NAV'
+        );
+
+        requestCurrentViewport();
+
+        return;
+      }
+
+      /*
+       * --------------------------------------------------------
+       * FINAL STOP TILE HAS ARRIVED
+       * --------------------------------------------------------
+       *
+       * Tell finishCapture() this was an early stop so the
+       * stitched image uses only the captured portion.
+       */
+      if (
+        captureSession.isFinalTile
+      ) {
+
+        captureSession.stopRequested =
+          true;
+
+        console.log(
+          '[PCT] FINAL STOP TILE RECEIVED - STITCHING'
+        );
+
+        await finishCapture();
+
+        return;
+      }
+
+      /*
+       * Fallback for any existing stop state.
+       */
       console.log(
         '[PCT] STOP REQUESTED - TILE RECEIVED - STITCHING'
       );
@@ -4108,22 +4416,6 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
           tile.scrollY || 0
         );
 
-      const previousScrollY =
-        i === 0
-          ? 0
-          : Number(
-              stitchTilesList[i - 1].scrollY || 0
-            );
-
-
-      // --------------------------------------------------------
-      // Screenshot viewport height in CSS pixels.
-      // --------------------------------------------------------
-
-      const viewportCssHeight =
-        image.naturalHeight /
-        dpr;
-
 
       // --------------------------------------------------------
       // Determine how much of this screenshot is NEW.
@@ -4143,106 +4435,24 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
       // We only stitch the new 100px.
       // --------------------------------------------------------
 
-      const scrollDeltaCss =
-        i === 0
-          ? viewportCssHeight
-          : Math.max(
-              0,
-              currentScrollY -
-              previousScrollY
-            );
-
-
-      if (
-        scrollDeltaCss <= 0
-      ) {
-
-        console.log(
-          '[PCT] SKIPPING ZERO-DELTA TILE',
-          {
-            index:
-              i + 1,
-
-            scrollY:
-              currentScrollY
-          }
-        );
-
-        continue;
-      }
-
-
-      // --------------------------------------------------------
-      // Source crop.
-      //
-      // If the scroll delta is smaller than the viewport,
-      // the top part overlaps the previous screenshot.
-      // Skip that overlapping source area.
-      // --------------------------------------------------------
-
-      const sourceYCss =
-        Math.max(
-          0,
-          viewportCssHeight -
-          scrollDeltaCss
-        );
-
-      const sourceY =
-        Math.round(
-          sourceYCss *
-          dpr
-        );
-
-      const sourceHeight =
-        Math.min(
-          image.naturalHeight -
-          sourceY,
-
-          Math.round(
-            scrollDeltaCss *
-            dpr
-          )
-        );
-
-
-      if (
-        sourceHeight <= 0
-      ) {
-        continue;
-      }
-
-
-      // --------------------------------------------------------
-      // Destination position.
-      //
-      // The cropped content starts immediately after the
-      // previous screenshot's already stitched content.
-      // --------------------------------------------------------
-
       const destinationY =
         Math.round(
-          (
-            currentScrollY +
-            sourceYCss
-          ) *
-          dpr *
-          scale
+          currentScrollY *
+            dpr *
+            scale
         );
-
 
       const destinationWidth =
         Math.round(
           image.naturalWidth *
-          scale
+            scale
         );
-
 
       const destinationHeight =
         Math.round(
-          sourceHeight *
-          scale
+          image.naturalHeight *
+            scale
         );
-
 
       if (
         destinationY >=
@@ -4251,15 +4461,12 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
         continue;
       }
 
-
       const visibleHeight =
         Math.min(
           destinationHeight,
-
           outputHeight -
-          destinationY
+            destinationY
         );
-
 
       if (
         visibleHeight <= 0
@@ -4267,27 +4474,17 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
         continue;
       }
 
-
-      // --------------------------------------------------------
-      // Draw only the NEW portion.
-      // --------------------------------------------------------
-
       ctx.drawImage(
         image,
-
         0,
-        sourceY,
-
+        0,
         image.naturalWidth,
-        sourceHeight,
-
+        image.naturalHeight,
         0,
         destinationY,
-
         destinationWidth,
         visibleHeight
       );
-
 
       console.log(
         '[PCT] TILE STITCHED',
@@ -4300,14 +4497,6 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
           scrollY:
             currentScrollY,
-
-          previousScrollY,
-
-          scrollDeltaCss,
-
-          sourceYCss,
-
-          sourceHeight,
 
           destinationY,
 
