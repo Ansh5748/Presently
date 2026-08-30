@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Plus, Users, Building2, Crown, Shield, UserMinus, Hash, Trash2, Send, Search, MoreVertical, Pencil, Save } from 'lucide-react';
+import { X, Plus, Users, Building2, Crown, Shield, UserMinus, Hash, Trash2, Send, Search, MoreVertical, Pencil, Save, ChevronLeft } from 'lucide-react';
 import { ApiService } from '../services/apiService';
 import type { Group, GroupMember, Subgroup, GroupType, MemberRole, UserSearchResult, Project } from '../types';
 
@@ -25,6 +25,7 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({ isOp
   const [projectsLoading, setProjectsLoading] = useState(false);
   const [assigningProjectId, setAssigningProjectId] = useState<string | null>(null);
   const [manageView, setManageView] = useState<ManageView | null>(null);
+  const [showMobileGroupList, setShowMobileGroupList] = useState(!lockToGroup);
 
   // Create group form
   const [groupName, setGroupName] = useState('');
@@ -140,6 +141,7 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({ isOp
     setGroupDesc('');
     setCreateError('');
     setManageView(null);
+    setShowMobileGroupList(!lockToGroup);
     setMemberEmail('');
     setMemberRole('member');
     setMemberDesignation('');
@@ -284,27 +286,27 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({ isOp
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden">
-        <div className="flex items-center justify-between p-5 border-b bg-gradient-to-r from-indigo-50 to-white">
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-2 sm:p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] sm:max-h-[90vh] flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between p-4 sm:p-5 border-b bg-gradient-to-r from-indigo-50 to-white">
           {lockToGroup ? (
             <div className="flex items-center gap-2 text-slate-700 font-semibold">
               <Users className="w-5 h-5 text-indigo-600" />
               <span>Manage Group</span>
             </div>
           ) : (
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <button
-                className={`px-4 py-2 rounded-lg font-medium text-sm transition ${tab === 'create' ? 'bg-indigo-600 text-white shadow' : 'text-slate-600 hover:bg-slate-100'}`}
+                className={`px-3 sm:px-4 py-2 rounded-lg font-medium text-xs sm:text-sm transition ${tab === 'create' ? 'bg-indigo-600 text-white shadow' : 'text-slate-600 hover:bg-slate-100'}`}
                 onClick={() => setTab('create')}
               >
-                <Plus className="w-4 h-4 inline mr-1.5" />Create Group
+                <Plus className="w-3.5 sm:w-4 h-3.5 sm:h-4 inline mr-1" />Create Group
               </button>
               <button
-                className={`px-4 py-2 rounded-lg font-medium text-sm transition ${tab === 'manage' ? 'bg-indigo-600 text-white shadow' : 'text-slate-600 hover:bg-slate-100'}`}
+                className={`px-3 sm:px-4 py-2 rounded-lg font-medium text-xs sm:text-sm transition ${tab === 'manage' ? 'bg-indigo-600 text-white shadow' : 'text-slate-600 hover:bg-slate-100'}`}
                 onClick={() => { setTab('manage'); setManageView(null); }}
               >
-                <Users className="w-4 h-4 inline mr-1.5" />Manage Groups ({groups.length})
+                <Users className="w-3.5 sm:w-4 h-3.5 sm:h-4 inline mr-1" />Manage ({groups.length})
               </button>
             </div>
           )}
@@ -313,27 +315,27 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({ isOp
           </button>
         </div>
 
-        <div className="flex-1 overflow-hidden flex">
+        <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
           {tab === 'create' ? (
-            <div className="p-8 w-full max-w-xl mx-auto">
-              <h2 className="text-2xl font-bold text-slate-800 mb-6">Create a new group</h2>
+            <div className="p-4 sm:p-8 w-full max-w-xl mx-auto overflow-y-auto">
+              <h2 className="text-xl sm:text-2xl font-bold text-slate-800 mb-4 sm:mb-6">Create a new group</h2>
 
               <label className="block text-sm font-medium text-slate-700 mb-2">Group Type</label>
-              <div className="grid grid-cols-2 gap-3 mb-5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">
                 <button
-                  className={`p-4 rounded-xl border-2 text-left transition ${groupType === 'team' ? 'border-indigo-600 bg-indigo-50' : 'border-slate-200 hover:border-slate-300'}`}
+                  className={`p-3 sm:p-4 rounded-xl border-2 text-left transition ${groupType === 'team' ? 'border-indigo-600 bg-indigo-50' : 'border-slate-200 hover:border-slate-300'}`}
                   onClick={() => setGroupType('team')}
                 >
-                  <Users className={`w-7 h-7 mb-2 ${groupType === 'team' ? 'text-indigo-600' : 'text-slate-400'}`} />
-                  <div className={`font-semibold ${groupType === 'team' ? 'text-indigo-700' : 'text-slate-700'}`}>Team Group</div>
+                  <Users className={`w-6 sm:w-7 h-6 sm:h-7 mb-2 ${groupType === 'team' ? 'text-indigo-600' : 'text-slate-400'}`} />
+                  <div className={`font-semibold text-sm sm:text-base ${groupType === 'team' ? 'text-indigo-700' : 'text-slate-700'}`}>Team Group</div>
                   <div className="text-xs text-slate-500 mt-1">Internal company team members</div>
                 </button>
                 <button
-                  className={`p-4 rounded-xl border-2 text-left transition ${groupType === 'client' ? 'border-indigo-600 bg-indigo-50' : 'border-slate-200 hover:border-slate-300'}`}
+                  className={`p-3 sm:p-4 rounded-xl border-2 text-left transition ${groupType === 'client' ? 'border-indigo-600 bg-indigo-50' : 'border-slate-200 hover:border-slate-300'}`}
                   onClick={() => setGroupType('client')}
                 >
-                  <Building2 className={`w-7 h-7 mb-2 ${groupType === 'client' ? 'text-indigo-600' : 'text-slate-400'}`} />
-                  <div className={`font-semibold ${groupType === 'client' ? 'text-indigo-700' : 'text-slate-700'}`}>Client Group</div>
+                  <Building2 className={`w-6 sm:w-7 h-6 sm:h-7 mb-2 ${groupType === 'client' ? 'text-indigo-600' : 'text-slate-400'}`} />
+                  <div className={`font-semibold text-sm sm:text-base ${groupType === 'client' ? 'text-indigo-700' : 'text-slate-700'}`}>Client Group</div>
                   <div className="text-xs text-slate-500 mt-1">Client team + select members</div>
                 </button>
               </div>
@@ -367,37 +369,69 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({ isOp
             </div>
           ) : (
             <>
-              {!lockToGroup && (
-                <div className="w-64 border-r bg-slate-50 p-3 overflow-y-auto flex-shrink-0">
-                  <div className="text-xs font-semibold uppercase text-slate-500 px-2 py-2">YOUR GROUPS</div>
+              {!lockToGroup && showMobileGroupList && (
+                <div className="w-full md:w-64 border-b md:border-b-0 md:border-r bg-slate-50 p-3 overflow-y-auto flex-shrink-0 md:flex-shrink-0 max-h-[35vh] md:max-h-none">
+                  <div className="text-xs font-semibold uppercase text-slate-500 px-2 py-2">
+                    YOUR GROUPS
+                  </div>
+
                   {groups.length === 0 && (
-                    <div className="text-xs text-slate-500 p-3 text-center">No groups yet. Create one!</div>
+                    <div className="text-xs text-slate-500 p-3 text-center">
+                      No groups yet. Create one!
+                    </div>
                   )}
+
                   {groups.map(g => (
                     <div
                       key={g.id}
-                      className={`w-full px-3 py-2.5 rounded-lg mb-1 transition ${manageView?.group.id === g.id ? 'bg-indigo-100 text-indigo-800' : 'hover:bg-white text-slate-700'}`}
+                      className={`w-full px-3 py-2.5 rounded-lg mb-1 transition ${
+                        manageView?.group.id === g.id
+                          ? 'bg-indigo-100 text-indigo-800'
+                          : 'hover:bg-white text-slate-700'
+                      }`}
                     >
-                      <div className="flex items-center gap-2">
-                        <button onClick={() => setManageView({ group: g, sub: 'info' })} className="flex items-center gap-2 min-w-0 flex-1 text-left">
-                          {g.type === 'team' ? <Users className="w-4 h-4 text-indigo-500 flex-shrink-0" /> : <Building2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />}
-                          <span className="font-medium text-sm truncate">{g.name}</span>
-                        </button>
-                      </div>
-                      <button onClick={() => setManageView({ group: g, sub: 'info' })} className="w-full text-left">
-                        <div className="text-xs text-slate-500 mt-0.5 ml-6">{g.members.length} members · {g.subgroups.length} channels</div>
+                      <button
+                        onClick={() => {
+                          setManageView({ group: g, sub: 'info' });
+                          setShowMobileGroupList(false);
+                        }}
+                        className="w-full text-left"
+                      >
+                        <div className="flex items-center gap-2">
+                          {g.type === 'team' ? (
+                            <Users className="w-4 h-4 text-indigo-500 flex-shrink-0" />
+                          ) : (
+                            <Building2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                          )}
+
+                          <span className="font-medium text-sm truncate">
+                            {g.name}
+                          </span>
+                        </div>
+
+                        <div className="text-xs text-slate-500 mt-0.5 ml-6">
+                          {g.members.length} members · {g.subgroups.length} channels
+                        </div>
                       </button>
                     </div>
                   ))}
                 </div>
               )}
 
-              <div className="flex-1 overflow-y-auto">
+              <div
+                className={`flex-1 overflow-y-auto ${
+                  !lockToGroup && showMobileGroupList ? 'hidden md:block' : ''
+                }`}
+              >
                 {!manageView ? (
                   <div className="h-full flex flex-col items-center justify-center text-slate-400">
                     <Users className="w-16 h-16 mb-4 opacity-40" />
-                    <div className="text-lg">{lockToGroup ? 'Loading group...' : 'Select a group to manage'}</div>
-                    <div className="text-sm mt-1">Manage members, roles, subgroups</div>
+                    <div className="text-lg">
+                      {lockToGroup ? 'Loading group...' : 'Select a group to manage'}
+                    </div>
+                    <div className="text-sm mt-1">
+                      Manage members, roles, subgroups
+                    </div>
                   </div>
                 ) : (
                   <GroupDetailView
@@ -405,6 +439,8 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({ isOp
                     sub={manageView.sub}
                     setSub={(s) => setManageView({ ...manageView, sub: s })}
                     currentUserId={currentUserId}
+                    onShowMobileGroupList={() => setShowMobileGroupList(true)}
+                    lockToGroup={lockToGroup}
                     canEdit={isOwnerOrAdmin(manageView.group)}
                     onNavigate={navigateTo}
                     onClose={onClose}
@@ -438,6 +474,7 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({ isOp
                   />
                 )}
               </div>
+
             </>
           )}
         </div>
@@ -451,6 +488,8 @@ interface GroupDetailViewProps {
   sub: ManageSub;
   setSub: (s: ManageSub) => void;
   currentUserId: string;
+  onShowMobileGroupList: () => void;
+  lockToGroup?: boolean;
   canEdit: boolean;
   onNavigate?: (path: string) => void;
   onClose: () => void;
@@ -555,34 +594,47 @@ const GroupDetailView: React.FC<GroupDetailViewProps> = (props) => {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="px-6 py-4 border-b bg-white sticky top-0 z-10">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-3">
+      <div className="px-4 sm:px-6 py-4 border-b bg-white sticky top-0 z-10">
+        <div className="flex items-center justify-between mb-3 gap-2">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             {group.type === 'team' ? (
-              <div className="w-10 h-10 rounded-lg bg-indigo-100 flex items-center justify-center"><Users className="w-5 h-5 text-indigo-600" /></div>
+              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg bg-indigo-100 flex items-center justify-center flex-shrink-0"><Users className="w-4 sm:w-5 h-4 sm:h-5 text-indigo-600" /></div>
             ) : (
-              <div className="w-10 h-10 rounded-lg bg-emerald-100 flex items-center justify-center"><Building2 className="w-5 h-5 text-emerald-600" /></div>
+              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg bg-emerald-100 flex items-center justify-center flex-shrink-0"><Building2 className="w-4 sm:w-5 h-4 sm:h-5 text-emerald-600" /></div>
             )}
-            <div>
+            <div className="min-w-0">
               {isEditingInfo ? (
                 <input
-                  className="text-lg font-bold text-slate-800 bg-transparent border-b border-slate-300 focus:border-indigo-500 outline-none px-0.5 py-0.5 -ml-0.5"
+                  className="text-base sm:text-lg font-bold text-slate-800 bg-transparent border-b border-slate-300 focus:border-indigo-500 outline-none px-0.5 py-0.5 -ml-0.5 w-full"
                   value={draftGroupName}
                   onChange={e => setDraftGroupName(e.target.value)}
                   disabled={!props.canEdit}
                 />
               ) : (
-                <div className="text-lg font-bold text-slate-800">{group.name}</div>
+                <div className="text-base sm:text-lg font-bold text-slate-800 truncate">{group.name}</div>
               )}
-              <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
-                <span className="px-1.5 py-0.5 rounded bg-slate-100 uppercase font-medium">{group.type}</span>
+              <div className="text-xs text-slate-500 flex flex-wrap items-center gap-1 sm:gap-2 mt-0.5">
+                <span className="px-1.5 py-0.5 rounded bg-slate-100 uppercase font-medium text-[10px]">{group.type}</span>
                 <span>{group.members.length} members</span>
                 {group.projectIds?.length > 0 && <span>· {group.projectIds.length} projects</span>}
               </div>
             </div>
           </div>
+
+          <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+            {!props.lockToGroup && (
+            <button
+              type="button"
+              onClick={props.onShowMobileGroupList}
+              className="md:hidden p-2 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition"
+              title="Your groups"
+              aria-label="Your groups"
+            >
+              <ChevronLeft className="w-6 h-5" />
+            </button>
+            )}  
           {props.canEdit && (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
               <button
                 onClick={async () => {
                   if (!isEditingInfo) {
@@ -601,20 +653,23 @@ const GroupDetailView: React.FC<GroupDetailViewProps> = (props) => {
               </button>
               <button
                 onClick={() => props.handleDeleteGroup(group.id)}
-                className="px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 rounded-lg transition"
+                className="px-2 sm:px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 rounded-lg transition"
               >
-                <Trash2 className="w-3.5 h-3.5 inline mr-1" />Delete Group
+                <Trash2 className="w-3.5 h-3.5 inline mr-1" />
+                <span className="hidden sm:inline">Delete Group</span>
+                <span className="sm:hidden">Delete</span>
               </button>
             </div>
           )}
+          </div>
         </div>
 
-        <div className="flex gap-1 -mb-4">
+        <div className="flex gap-0.5 sm:gap-1 -mb-4 overflow-x-auto -mx-4 sm:-mx-6 px-4 sm:px-6">
           {(['info', 'members', 'subgroups', 'projects'] as const).map(s => (
             <button
               key={s}
               onClick={() => { void setSubWithAutoSave(s); }}
-              className={`px-4 py-2 text-sm font-medium capitalize border-b-2 transition ${sub === s ? 'border-indigo-600 text-indigo-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+              className={`px-2 sm:px-4 py-2 text-xs sm:text-sm font-medium capitalize border-b-2 transition whitespace-nowrap flex-shrink-0 ${sub === s ? 'border-indigo-600 text-indigo-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
             >
               {s === 'info' && 'ℹ️ Info'}
               {s === 'members' && `👥 Members (${group.members.length})`}
@@ -625,7 +680,7 @@ const GroupDetailView: React.FC<GroupDetailViewProps> = (props) => {
         </div>
       </div>
 
-      <div className="p-6">
+      <div className="p-4 sm:p-6">
         {sub === 'info' && (
           <div>
             <label className="block text-xs font-semibold uppercase text-slate-500 mb-2">Description</label>
@@ -677,8 +732,8 @@ const GroupDetailView: React.FC<GroupDetailViewProps> = (props) => {
                   </button>
                 </div>
 
-                <div className="grid grid-cols-12 gap-3 relative">
-                  <div className="col-span-5 relative">
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 relative">
+                  <div className="sm:col-span-5 relative">
                     <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                     <input
                       className="w-full pl-9 pr-3 py-2 rounded-lg border border-slate-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 outline-none text-sm"
@@ -706,7 +761,7 @@ const GroupDetailView: React.FC<GroupDetailViewProps> = (props) => {
                     )}
                   </div>
                   <select
-                    className="col-span-2 px-3 py-2 rounded-lg border border-slate-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 outline-none text-sm"
+                    className="sm:col-span-2 px-3 py-2 rounded-lg border border-slate-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 outline-none text-sm w-full"
                     value={props.memberRole}
                     onChange={e => props.setMemberRole(e.target.value as MemberRole)}
                   >
@@ -714,14 +769,14 @@ const GroupDetailView: React.FC<GroupDetailViewProps> = (props) => {
                     <option value="admin">Admin</option>
                   </select>
                   <input
-                    className="col-span-4 px-3 py-2 rounded-lg border border-slate-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 outline-none text-sm"
+                    className="sm:col-span-4 px-3 py-2 rounded-lg border border-slate-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 outline-none text-sm w-full"
                     placeholder="Designation (e.g. PM, Designer)"
                     value={props.memberDesignation}
                     onChange={e => props.setMemberDesignation(e.target.value)}
                   />
                   <button
                     onClick={async () => { await props.handleAddMember(group.id); setShowAddMember(false); }}
-                    className="col-span-1 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition"
+                    className="sm:col-span-1 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition w-full sm:w-auto"
                     disabled={!props.memberEmail.trim()}
                   >
                     Add
@@ -1032,35 +1087,37 @@ const MemberRow: React.FC<{ group: Group; member: GroupMember; props: GroupDetai
 
   return (
     <div
-      className="flex items-center gap-3 p-3 rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer"
+      className={`flex ${isEditing ? 'flex-col sm:flex-row' : 'flex-row'} items-start sm:items-center gap-3 p-3 rounded-lg border border-slate-200 hover:bg-slate-50 ${isEditing ? '' : 'cursor-pointer'}`}
       onClick={() => {
         if (isEditing) return;
         props.onNavigate?.(`/chats/${memberUserId}`);
         props.onClose();
       }}
     >
-      {userObj?.avatarUrl ? (
-        <img src={userObj.avatarUrl} alt={name} className="w-10 h-10 rounded-full object-cover flex-shrink-0" />
-      ) : (
-        <div className={`w-10 h-10 rounded-full bg-gradient-to-br ${isOwner ? 'from-amber-400 to-orange-500' : 'from-indigo-400 to-purple-500'} text-white flex items-center justify-center font-semibold text-sm flex-shrink-0`}>
-          {name ? name.toString().charAt(0).toUpperCase() : '?'}
+      <div className="flex items-center gap-3 w-full sm:w-auto">
+        {userObj?.avatarUrl ? (
+          <img src={userObj.avatarUrl} alt={name} className="w-10 h-10 rounded-full object-cover flex-shrink-0" />
+        ) : (
+          <div className={`w-10 h-10 rounded-full bg-gradient-to-br ${isOwner ? 'from-amber-400 to-orange-500' : 'from-indigo-400 to-purple-500'} text-white flex items-center justify-center font-semibold text-sm flex-shrink-0`}>
+            {name ? name.toString().charAt(0).toUpperCase() : '?'}
+          </div>
+        )}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5">
+            <div className="font-medium text-slate-700 truncate">{name}</div>
+            {props.getMemberRoleIcon(isOwner ? 'owner' : role)}
+            {isCurrentUser && <span className="text-xs text-indigo-600 font-medium">(you)</span>}
+          </div>
+          {roleLabel && <div className="text-[11px] font-semibold text-slate-600">{roleLabel}</div>}
+          {!isEditing && designation && <div className="text-xs text-slate-500 truncate">{designation}</div>}
+          {!isEditing && email && <div className="text-xs text-slate-400 truncate">{email}</div>}
         </div>
-      )}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5">
-          <div className="font-medium text-slate-700 truncate">{name}</div>
-          {props.getMemberRoleIcon(isOwner ? 'owner' : role)}
-          {isCurrentUser && <span className="text-xs text-indigo-600 font-medium">(you)</span>}
-        </div>
-        {roleLabel && <div className="text-[11px] font-semibold text-slate-600">{roleLabel}</div>}
-        {designation && <div className="text-xs text-slate-500 truncate">{designation}</div>}
-        {email && <div className="text-xs text-slate-400 truncate">{email}</div>}
       </div>
 
       {props.canEdit && !isOwner && (
-        <div className="flex items-center gap-2">
+        <div className={`flex ${isEditing ? 'flex-wrap w-full sm:w-auto' : ''} items-center gap-2 ${isEditing ? '' : 'flex-shrink-0'}`}>
           {isEditing && (
-            <>
+            <div className="flex flex-wrap gap-2 w-full sm:w-auto sm:inline-flex">
               <select
                 value={role}
                 onChange={e => setRole(e.target.value as MemberRole)}
@@ -1071,7 +1128,7 @@ const MemberRow: React.FC<{ group: Group; member: GroupMember; props: GroupDetai
                 <option value="admin">Admin</option>
               </select>
               <input
-                className="w-40 px-2 py-1.5 rounded-md border border-slate-200 text-xs focus:border-indigo-500 outline-none"
+                className="w-full sm:w-40 flex-1 sm:flex-none px-2 py-1.5 rounded-md border border-slate-200 text-xs focus:border-indigo-500 outline-none"
                 placeholder="Designation..."
                 value={designation}
                 onChange={e => setDesignation(e.target.value)}
@@ -1086,7 +1143,7 @@ const MemberRow: React.FC<{ group: Group; member: GroupMember; props: GroupDetai
                   <UserMinus className="w-4 h-4" />
                 </button>
               )}
-            </>
+            </div>
           )}
           <button
             onClick={(e) => {

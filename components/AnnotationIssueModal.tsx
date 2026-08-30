@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Send, Tag, Shield, Eye, UserCheck, Clock, CheckCircle2, AlertCircle, ChevronDown, Plus, XCircle, Pencil, Maximize2, Trash2, MessageSquare, Loader2 } from 'lucide-react';
+import { X, Send, Tag, Shield, Eye, UserCheck, Clock, CheckCircle2, AlertCircle, ChevronDown, Plus, XCircle, Pencil, Maximize2, Trash2, ChevronRight,  ChevronLeft, MessageSquare, Loader2 } from 'lucide-react';
 import { ApiService } from '../services/apiService';
 import type { Pin, Project, AnnotationIssue, AnnotationMessage, AssigneeOption, AnnotationIssueStatus, MessageVisibility } from '../types';
 
@@ -100,6 +100,7 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
   const [pinModeDraft, setPinModeDraft] = useState<'issue' | 'comment'>('issue');
   const [pinDetailsSaving, setPinDetailsSaving] = useState(false);
   const [localPin, setLocalPin] = useState<Pin | null>(pin);
+  const [mobileAnnotationView, setMobileAnnotationView] = useState<'issue' | 'discussion'>('issue');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLDivElement>(null);
@@ -125,6 +126,7 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
 
   useEffect(() => {
     if (isOpen && pin) {
+      setMobileAnnotationView('issue');
       loadIssue();
     } else {
       setIssue(null);
@@ -574,9 +576,9 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden">
-        <div className="px-6 py-4 border-b bg-gradient-to-r from-indigo-50 via-white to-purple-50 flex items-start justify-between">
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-2 sm:p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[92vh] sm:max-h-[92vh] flex flex-col overflow-hidden">
+        <div className="px-4 sm:px-6 py-4 border-b bg-gradient-to-r from-indigo-50 via-white to-purple-50 flex items-start justify-between">
           <div className="flex-1 min-w-0 pr-4">
             <div className="flex items-center gap-2 mb-1">
               <AlertCircle className="w-5 h-5 text-red-500" />
@@ -591,6 +593,27 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
                 </div>
                 {!readOnly && (
                   <>
+                    {/* Mobile: Issue / Discussion toggle */}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setMobileAnnotationView(
+                          mobileAnnotationView === 'issue'
+                            ? 'discussion'
+                            : 'issue'
+                        )
+                      }
+                      className="md:hidden px-1 py-1 text-sm font-medium text-slate-500 hover:text-slate-800 transition"
+                      title={
+                        mobileAnnotationView === 'issue'
+                          ? 'Show discussion'
+                          : 'Show issue'
+                      }
+                    >
+                      {mobileAnnotationView === 'issue'
+                        ? <ChevronRight className="w-6 h-5" />
+                        : <ChevronLeft className="w-6 h-5" />}
+                    </button>
                     <button
                       onClick={() => {
                         setPinDraftTitle(activePin.title || '');
@@ -681,9 +704,12 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
           </button>
         </div>
 
-        <div className="flex-1 flex min-h-0">
+        <div className="flex-1 flex flex-col md:flex-row min-h-0">
           {/* Left: controls */}
-          <div className="w-80 border-r bg-slate-50 flex-shrink-0 p-5 space-y-5 overflow-y-auto">
+          <div className={`w-full md:w-80 border-b md:border-b-0 md:border-r bg-slate-50 flex-shrink-0 md:flex-shrink-0 p-4 sm:p-5 space-y-5 overflow-y-auto max-h-[45vh] md:max-h-none ${
+            mobileAnnotationView === 'issue' ? 'block' : 'hidden md:block'
+          }`}>
+            
             {loading && <div className="text-sm text-slate-500 py-8 text-center">Loading...</div>}
 
             {!loading && (
@@ -1060,13 +1086,15 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
           </div>
 
           {/* Right: chat */}
-          <div className="flex-1 flex flex-col min-w-0">
-            <div className="px-5 py-3 border-b bg-white text-sm text-slate-600 flex items-center justify-between">
+          <div className={`flex-1 flex flex-col min-w-0 min-h-[50vh] md:min-h-0 ${
+            mobileAnnotationView === 'discussion' ? 'block md:flex' : 'hidden md:flex'
+          }`}>  
+            <div className="px-4 sm:px-5 py-3 border-b bg-white text-sm text-slate-600 flex items-center justify-between">
               <span className="font-semibold text-slate-700">Discussion</span>
               <span className="text-xs text-slate-400">{messages.length} message{messages.length === 1 ? '' : 's'}</span>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-5 space-y-4 bg-gradient-to-b from-white to-slate-50">
+            <div className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-4 bg-gradient-to-b from-white to-slate-50">
               {!issue && !loading && (
                 <div className="text-center text-slate-400 text-sm py-10">
                   Create the issue first to start a discussion
@@ -1110,11 +1138,11 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
               <div ref={messagesEndRef} />
             </div>
 
-            <div className="p-4 border-t bg-white">
+            <div className="p-3 sm:p-4 border-t bg-white">
               {issue && (
                 <>
                   {isTeamMember && (
-                    <div className="flex gap-2 mb-2 items-center">
+                    <div className="flex flex-wrap gap-2 mb-2 items-center">
                       <span className="text-xs text-slate-500 mr-1">Visibility:</span>
                       <button
                         onClick={() => setVisibility('all')}
@@ -1158,9 +1186,9 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
 
       {/* Full Assignment History Modal */}
       {showHistoryModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 sm:p-4 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95">
-            <div className="p-4 border-b flex items-center justify-between bg-slate-50">
+            <div className="p-3 sm:p-4 border-b flex items-center justify-between bg-slate-50">
               <h4 className="font-bold text-slate-800 text-sm">
                 Complete Assignment History · Issue #{activePin.number}
               </h4>
@@ -1168,7 +1196,7 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
                 <X className="w-4 h-4 text-slate-500" />
               </button>
             </div>
-            <div className="p-5 max-h-96 overflow-y-auto space-y-3">
+            <div className="p-3 sm:p-5 max-h-[60vh] sm:max-h-96 overflow-y-auto space-y-3">
               {assignmentChain.map((n, idx) => {
                 const { firstName, designation, fullName } = getFirstNameAndDesignation(n.user);
                 const assignerFirstName = getFirstNameAndDesignation(n.fromUser).firstName;
