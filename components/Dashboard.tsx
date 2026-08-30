@@ -426,7 +426,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
                 onClick={() => setShowSubscriptionModal(true)}
                 className="flex items-center gap-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/80 px-2 sm:px-3.5 py-1.5 rounded-xl transition-all text-xs font-semibold"
               >
-                <Crown size={14} className="text-amber-600" /> Upgrade Plan
+                <Crown size={14} className="text-amber-600" />
+                <span className="hidden sm:inline">Upgrade Plan</span>
               </button>
             )}
             <button
