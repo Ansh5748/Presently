@@ -499,6 +499,9 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
            * ------------------------------------------------------
            */
 
+          captureSession._wasStoppedByUser =
+            true;
+
           if (
             captureSession.captureInFlight
           ) {
@@ -2737,7 +2740,19 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
         bottomRechecks: 0,
 
         initialDocumentHeight:
-          getDocumentHeight()
+          getDocumentHeight(),
+
+        // Preserve the page height from the actual capture state.
+        // This must not be recalculated after restoring the
+        // mobile bottom sticky navigation.
+        captureDocumentHeight:
+          getDocumentHeight(),
+
+        // Persistent marker that the user manually stopped the capture.
+        // Unlike stopRequested, this is never reset during the final tile
+        // flow so finishCapture() correctly knows the capture was stopped early
+        // and must use the tile-based canvas height to avoid blank white space.
+        _wasStoppedByUser: false
       };
 
 
@@ -3125,6 +3140,47 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
       }
     );
 
+    console.log(
+  '[PCT DEBUG] TILE STORED',
+  {
+    tileIndex:
+      captureSession.tiles.length,
+
+    tileScrollY:
+      Number(
+        message.scrollY || 0
+      ),
+
+    actualWindowScrollY:
+      Math.round(
+        window.scrollY
+      ),
+
+    documentHeight:
+      getDocumentHeight(),
+
+    maxScroll:
+      getMaxScroll(),
+
+    viewportHeight:
+      window.innerHeight,
+
+    imageWidth:
+      message.image
+        ? 'present'
+        : 0,
+
+    stopRequested:
+      captureSession.stopRequested,
+
+    stopFinalTilePending:
+      captureSession.stopFinalTilePending,
+
+    isFinalTile:
+      captureSession.isFinalTile
+  }
+);
+
         // ----------------------------------------------------------
     // STOP REQUESTED
     //
@@ -3139,6 +3195,51 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
     if (
       captureSession.stopRequested
     ) {
+
+      console.log(
+  '[PCT DEBUG] STOP STATE',
+  {
+    tileCount:
+      captureSession.tiles.length,
+
+    tileScrollPositions:
+      captureSession.tiles.map(
+        tile =>
+          Number(
+            tile?.scrollY || 0
+          )
+      ),
+
+    currentWindowScrollY:
+      Math.round(
+        window.scrollY
+      ),
+
+    documentHeight:
+      getDocumentHeight(),
+
+    maxScroll:
+      getMaxScroll(),
+
+    viewportHeight:
+      window.innerHeight,
+
+    captureDocumentHeight:
+      captureSession.captureDocumentHeight,
+
+    finalCaptureDocumentHeight:
+      captureSession.finalCaptureDocumentHeight,
+
+    stopRequested:
+      captureSession.stopRequested,
+
+    stopFinalTilePending:
+      captureSession.stopFinalTilePending,
+
+    isFinalTile:
+      captureSession.isFinalTile
+  }
+);
 
       /*
        * --------------------------------------------------------
@@ -3158,6 +3259,11 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
         console.log(
           '[PCT] STOP TILE RECEIVED - RESTORING MOBILE BOTTOM NAV'
         );
+
+        // Preserve the real page height BEFORE restoring
+        // the mobile bottom navigation.
+        captureSession.finalCaptureDocumentHeight =
+          getDocumentHeight();
 
         restoreMobileBottomStickyElements();
 
@@ -3306,7 +3412,17 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
     const maxScroll =
       getMaxScroll();
-
+    
+    if (
+      captureSession &&
+      !captureSession.cancelled
+    ) {
+      captureSession.captureDocumentHeight =
+        Math.max(
+          captureSession.captureDocumentHeight || 0,
+          documentHeight
+        );
+    }
 
     console.log(
       '[PCT] AFTER TILE PAGE DIMENSIONS',
@@ -3721,6 +3837,16 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
         window.scrollY
       );
 
+    if (
+      captureSession &&
+      !captureSession.cancelled
+    ) {
+      captureSession.captureDocumentHeight =
+        Math.max(
+          captureSession.captureDocumentHeight || 0,
+          heightAfter
+        );
+    }
 
     console.log(
       '[PCT] BOTTOM WAIT COMPLETE',
@@ -3837,6 +3963,11 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
     // footer screenshot only.
     // ----------------------------------------------------------
 
+    // Preserve the real page height BEFORE restoring
+    // the mobile bottom navigation.
+    session.finalCaptureDocumentHeight =
+      getDocumentHeight();
+
     restoreMobileBottomStickyElements();
 
     // Reset duplicate protection because we intentionally
@@ -3906,10 +4037,80 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
       }
 
 
+      console.log(
+  '[PCT DEBUG] FINISH CAPTURE INPUT',
+  {
+    stoppedEarly:
+      Boolean(
+        session.stopRequested ||
+        session._wasStoppedByUser
+      ),
+
+    tileCount:
+      session.tiles.length,
+
+    tileScrollPositions:
+      session.tiles.map(
+        tile =>
+          Number(
+            tile?.scrollY || 0
+          )
+      ),
+
+    maxCapturedScrollY:
+      session.tiles.length
+        ? Math.max(
+            ...session.tiles.map(
+              tile =>
+                Number(
+                  tile?.scrollY || 0
+                )
+            )
+          )
+        : 0,
+
+    currentWindowScrollY:
+      Math.round(
+        window.scrollY
+      ),
+
+    documentHeight:
+      getDocumentHeight(),
+
+    captureDocumentHeight:
+      session.captureDocumentHeight,
+
+    finalCaptureDocumentHeight:
+      session.finalCaptureDocumentHeight,
+
+    maxScroll:
+      getMaxScroll(),
+
+    viewportHeight:
+      window.innerHeight,
+
+    dpr:
+      window.devicePixelRatio,
+
+    stopRequested:
+      session.stopRequested,
+
+    isFinalTile:
+      session.isFinalTile,
+
+    _wasStoppedByUser:
+      session._wasStoppedByUser
+  }
+);
+
+      const wasStoppedEarly =
+        session.stopRequested ||
+        session._wasStoppedByUser;
+
       const finalImage =
         await stitchTiles(
           session.tiles,
-          session.stopRequested
+          wasStoppedEarly
         );
 
 
@@ -4066,6 +4267,8 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
 
     const documentCssHeight =
+      captureSession?.finalCaptureDocumentHeight ||
+      captureSession?.captureDocumentHeight ||
       getDocumentHeight();
 
     // ----------------------------------------------------------
@@ -4095,48 +4298,97 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
     let stitchCssHeight =
       documentCssHeight;
 
-    if (
-      stoppedEarly &&
-      tiles.length > 0
-    ) {
-      const maxCapturedScrollY =
-        Math.max(
-          ...tiles.map(
-            tile =>
-              Number(
-                tile?.scrollY || 0
-              )
-          )
-        );
-
-      const viewportCssHeight =
-        firstImage.naturalHeight /
-        dpr;
-
-      const capturedCssHeight =
-        maxCapturedScrollY +
-        viewportCssHeight;
-
-      stitchCssHeight =
-        Math.min(
-          documentCssHeight,
-          Math.max(
-            viewportCssHeight,
-            capturedCssHeight
-          )
-        );
-
       console.log(
-        '[PCT] EARLY STOP HEIGHT',
-        {
-          documentCssHeight,
-          maxCapturedScrollY,
-          viewportCssHeight,
-          capturedCssHeight,
-          stitchCssHeight
-        }
-      );
+  '[PCT DEBUG] STITCH HEIGHT INPUT',
+  {
+    stoppedEarly,
+
+    documentCssHeight,
+
+    captureDocumentHeight:
+      captureSession?.captureDocumentHeight,
+
+    finalCaptureDocumentHeight:
+      captureSession?.finalCaptureDocumentHeight,
+
+    tileCount:
+      tiles.length,
+
+    tileScrollPositions:
+      tiles.map(
+        tile =>
+          Number(
+            tile?.scrollY || 0
+          )
+      ),
+
+    dpr,
+
+    viewportNaturalHeight:
+      firstImage.naturalHeight,
+
+    viewportCssHeight:
+      firstImage.naturalHeight /
+      dpr
+  }
+);
+
+    if (
+  stoppedEarly &&
+  tiles.length > 0
+) {
+  const viewportCssHeight =
+    firstImage.naturalHeight /
+    dpr;
+
+  /*
+   * STOP CAPTURE:
+   *
+   * The final screenshot must end exactly where
+   * the LAST CAPTURED TILE ends.
+   *
+   * Do NOT use document height here because the user
+   * may have stopped long before the page footer.
+   */
+
+  const lastTile =
+    tiles[tiles.length - 1];
+
+  const lastTileScrollY =
+    Number(
+      lastTile?.scrollY || 0
+    );
+
+  const capturedCssHeight =
+    lastTileScrollY +
+    viewportCssHeight;
+
+  /*
+   * Never allow a stopped capture to become taller
+   * than the actual document.
+   */
+  stitchCssHeight =
+    Math.min(
+      documentCssHeight,
+      Math.max(
+        viewportCssHeight,
+        capturedCssHeight
+      )
+    );
+
+  console.log(
+    '[PCT] STOP HEIGHT FIX',
+    {
+      documentCssHeight,
+      lastTileScrollY,
+      viewportCssHeight,
+      capturedCssHeight,
+      stitchCssHeight,
+      tileCount:
+        tiles.length
     }
+  );
+}
 
     // ----------------------------------------------------------
     // Desired dimensions before safety scaling.
@@ -4147,7 +4399,7 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
     const desiredHeight =
       Math.max(
-        viewportHeight,
+        1,
         Math.ceil(
           stitchCssHeight *
           dpr
@@ -4411,33 +4663,31 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
       // Current and previous scroll positions in CSS pixels.
       // --------------------------------------------------------
 
+
+      // --------------------------------------------------------
+      // Calculate the actual destination position.
+      //
+      // IMPORTANT:
+      // scrollY is the page's CSS scroll position, but the first
+      // post-header tile can have a different effective position
+      // because persistent UI was hidden after tile #1.
+      //
+      // For stitching, use the actual tile sequence and the
+      // distance between captured positions rather than blindly
+      // assuming every scrollY maps directly to the canvas.
+      // --------------------------------------------------------
+
       const currentScrollY =
-        Number(
-          tile.scrollY || 0
-        );
+        Number(tile.scrollY || 0);
 
-
-      // --------------------------------------------------------
-      // Determine how much of this screenshot is NEW.
-      //
-      // Normal tile:
-      //
-      // previous Y = 800
-      // current Y  = 1600
-      // delta      = 800
-      //
-      // Final overlapping tile:
-      //
-      // previous Y = 1600
-      // current Y  = 1700
-      // delta      = 100
-      //
-      // We only stitch the new 100px.
-      // --------------------------------------------------------
+      const destinationCssY =
+        i === 0
+          ? 0
+          : currentScrollY;
 
       const destinationY =
         Math.round(
-          currentScrollY *
+          destinationCssY *
             dpr *
             scale
         );
@@ -4454,6 +4704,31 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
             scale
         );
 
+        console.log(
+  '[PCT DEBUG] TILE DRAW POSITION',
+  {
+    tileIndex:
+      i,
+
+    scrollY:
+      currentScrollY,
+
+    destinationY,
+
+    destinationHeight,
+
+    outputHeight,
+
+    remainingCanvasHeight:
+      outputHeight -
+      destinationY,
+
+    isLastTile:
+      i ===
+      stitchTilesList.length - 1
+  }
+);
+
       if (
         destinationY >=
         outputHeight
@@ -4461,15 +4736,41 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
         continue;
       }
 
-      const visibleHeight =
+      // --------------------------------------------------------
+      // Crop the source image when the final canvas ends before
+      // the full viewport tile.
+      //
+      // This prevents the last tile from being vertically
+      // stretched when the webpage is shorter than the viewport.
+      // --------------------------------------------------------
+
+      const availableDestinationHeight =
+        outputHeight -
+        destinationY;
+
+      const visibleDestinationHeight =
         Math.min(
           destinationHeight,
-          outputHeight -
-            destinationY
+          availableDestinationHeight
         );
 
       if (
-        visibleHeight <= 0
+        visibleDestinationHeight <= 0
+      ) {
+        continue;
+      }
+
+      const sourceHeight =
+        Math.min(
+          image.naturalHeight,
+          Math.ceil(
+            visibleDestinationHeight /
+            scale
+          )
+        );
+
+      if (
+        sourceHeight <= 0
       ) {
         continue;
       }
@@ -4479,13 +4780,15 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
         0,
         0,
         image.naturalWidth,
-        image.naturalHeight,
+        sourceHeight,
         0,
         destinationY,
         destinationWidth,
-        visibleHeight
+        Math.round(
+          sourceHeight *
+            scale
+        )
       );
-
       console.log(
         '[PCT] TILE STITCHED',
         {
@@ -4500,7 +4803,8 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
           destinationY,
 
-          visibleHeight
+          visibleHeight:
+      visibleDestinationHeight
         }
       );
 
@@ -4787,32 +5091,19 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
   // ============================================================
 
   function getDocumentHeight() {
-
-    return Math.max(
-
+    const bodyHeight =
       document.body
         ? document.body.scrollHeight
-        : 0,
+        : 0;
 
+    const documentHeight =
       document.documentElement
         ? document.documentElement.scrollHeight
-        : 0,
+        : 0;
 
-      document.body
-        ? document.body.offsetHeight
-        : 0,
-
-      document.documentElement
-        ? document.documentElement.offsetHeight
-        : 0,
-
-      document.body
-        ? document.body.clientHeight
-        : 0,
-
-      document.documentElement
-        ? document.documentElement.clientHeight
-        : 0
+    return Math.max(
+      bodyHeight,
+      documentHeight
     );
   }
 
