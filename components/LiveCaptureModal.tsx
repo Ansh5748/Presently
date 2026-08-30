@@ -52,6 +52,12 @@ export const LiveCaptureModal: React.FC<LiveCaptureModalProps> = ({
   const [errorMsg, setErrorMsg] =
     useState<string | null>(null);
 
+  const [hasFirstViewport, setHasFirstViewport] =
+    useState(false);
+
+  const [isCaptureActive, setIsCaptureActive] =
+    useState(false);
+
   const [proxyIndex, setProxyIndex] = useState(0);
 
   const [isTabSharing, setIsTabSharing] =
@@ -74,6 +80,12 @@ export const LiveCaptureModal: React.FC<LiveCaptureModalProps> = ({
 
   const abortControllerRef =
     useRef<AbortController | null>(null);
+
+  const captureRequestIdRef =
+    useRef<string | null>(null);
+
+  const stopCaptureRef =
+    useRef(false);
 
   const loadingSteps = [
     `Opening ${url} in Chrome...`,
@@ -122,7 +134,63 @@ export const LiveCaptureModal: React.FC<LiveCaptureModalProps> = ({
       abortControllerRef.current = null;
     }
 
+    setIsCaptureActive(false);
+    setHasFirstViewport(false);
+
     onClose();
+  };
+
+  // ------------------------------------------------------------
+  // STOP & SAVE CAPTURE
+  //
+  // Different from Cancel:
+  //
+  // Cancel = discard capture
+  // Stop   = stitch everything captured so far
+  // ------------------------------------------------------------
+
+  const handleStopCapture = () => {
+    const requestId =
+      captureRequestIdRef.current;
+
+    if (
+      !requestId ||
+      isDone ||
+      stopCaptureRef.current
+    ) {
+      return;
+    }
+
+    console.log(
+      '[LiveCaptureModal] 🛑 STOP & SAVE REQUESTED',
+      {
+        requestId
+      }
+    );
+
+    stopCaptureRef.current =
+      true;
+
+    setCurrentStep(
+      'Stopping capture & stitching captured page...'
+    );
+
+    /*
+    * IMPORTANT:
+    *
+    * Do NOT abort the AbortController here.
+    *
+    * abort() goes through the existing CANCEL flow and
+    * would throw away the captured tiles.
+    */
+    window.postMessage(
+      {
+        type:
+          'PRESENTLY_LIVE_CAPTURE_STOP',
+        requestId
+      },
+      window.location.origin
+    );
   };
 
   // ------------------------------------------------------------
@@ -145,6 +213,8 @@ export const LiveCaptureModal: React.FC<LiveCaptureModalProps> = ({
       }
 
       setIsTabSharing(true);
+      setIsCaptureActive(true);
+      setHasFirstViewport(false);
       setCurrentStep(
         'Select Chrome tab or window to share...'
       );
@@ -298,11 +368,13 @@ export const LiveCaptureModal: React.FC<LiveCaptureModalProps> = ({
       setCapturedPreview(base64);
       setIsDone(true);
       setIsTabSharing(false);
+      setIsCaptureActive(false);
 
       onCaptureComplete(base64);
     } catch (e: any) {
       setIsTabSharing(false);
       setShareCountdown(null);
+      setIsCaptureActive(false);
 
       console.warn(
         '[LiveCaptureModal] Share screen cancelled:',
@@ -331,6 +403,12 @@ export const LiveCaptureModal: React.FC<LiveCaptureModalProps> = ({
 
         const requestId =
           crypto.randomUUID();
+
+        captureRequestIdRef.current =
+          requestId;
+
+        stopCaptureRef.current =
+          false;
 
         let finished = false;
 
@@ -434,6 +512,9 @@ export const LiveCaptureModal: React.FC<LiveCaptureModalProps> = ({
           // LIVE TILE FROM REAL CHROME
           // ----------------------------------------------------
           if (data.type === 'PRESENTLY_LIVE_CAPTURE_TILE') {
+            
+            setHasFirstViewport(true);
+
             setCapturedPreview(data.image);
 
             if (scrollBoxRef.current) {
@@ -557,6 +638,9 @@ export const LiveCaptureModal: React.FC<LiveCaptureModalProps> = ({
     setProxyIndex(0);
     setIsWebpageLoaded(false);
     setLoadingStepIdx(0);
+
+    setHasFirstViewport(false);
+    setIsCaptureActive(true);
 
     // Fresh AbortController
     const controller =
@@ -746,6 +830,8 @@ export const LiveCaptureModal: React.FC<LiveCaptureModalProps> = ({
 
           setIsDone(true);
 
+          setIsCaptureActive(false);
+
           await new Promise(
             (resolve) =>
               setTimeout(resolve, 500)
@@ -773,6 +859,8 @@ export const LiveCaptureModal: React.FC<LiveCaptureModalProps> = ({
             '[LiveCaptureModal] Live Chrome capture error:',
             err
           );
+
+          setIsCaptureActive(false);
 
           setErrorMsg(
             err?.message ||
@@ -887,10 +975,16 @@ export const LiveCaptureModal: React.FC<LiveCaptureModalProps> = ({
                     'desktop'
                   )
                 }
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${!isMobile
-                    ? 'bg-white text-slate-900 shadow-2xs border border-slate-200'
-                    : 'text-slate-600 hover:text-slate-900'
-                  }`}
+                disabled={isCaptureActive}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  isCaptureActive
+                    ? !isMobile
+                      ? 'bg-white text-slate-900 shadow-2xs border border-slate-200'
+                      : 'text-slate-400 opacity-50 cursor-not-allowed'
+                    : !isMobile
+                      ? 'bg-white text-slate-900 shadow-2xs border border-slate-200'
+                      : 'text-slate-600 hover:text-slate-900'
+                }`}
               >
                 <Monitor size={14} />
                 Desktop
@@ -902,10 +996,16 @@ export const LiveCaptureModal: React.FC<LiveCaptureModalProps> = ({
                     'mobile'
                   )
                 }
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${isMobile
-                    ? 'bg-white text-slate-900 shadow-2xs border border-slate-200'
-                    : 'text-slate-600 hover:text-slate-900'
-                  }`}
+                disabled={isCaptureActive}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  isCaptureActive
+                    ? isMobile
+                      ? 'bg-white text-slate-900 shadow-2xs border border-slate-200'
+                      : 'text-slate-400 opacity-50 cursor-not-allowed'
+                    : isMobile
+                      ? 'bg-white text-slate-900 shadow-2xs border border-slate-200'
+                      : 'text-slate-600 hover:text-slate-900'
+                }`}
               >
                 <Smartphone size={14} />
                 Mobile
@@ -979,6 +1079,38 @@ export const LiveCaptureModal: React.FC<LiveCaptureModalProps> = ({
             </div>
 
           </div>
+          {/* Stop & Save Current Capture */}
+          <button
+            onClick={
+              handleStopCapture
+            }
+            disabled={
+              !hasFirstViewport ||
+              isDone ||
+              stopCaptureRef.current ||
+              isTabSharing ||
+              !!errorMsg ||
+              !isCaptureActive
+            }
+            className={`px-3.5 py-2 rounded-2xl font-bold text-xs transition-all flex items-center gap-1.5 shadow-sm ${
+              stopCaptureRef.current
+                ? 'bg-slate-200 text-slate-500 cursor-wait'
+                : !hasFirstViewport || !isCaptureActive
+                  ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                  : 'bg-amber-500 hover:bg-amber-600 text-white active:scale-98'
+            }`}
+            title={
+              !hasFirstViewport
+                ? 'Stop becomes available after the first viewport is captured'
+                : 'Stop capture and save everything captured so far'
+            }
+          >
+            <ArrowDown size={14} />
+
+            {stopCaptureRef.current
+              ? 'Stitching...'
+              : 'Stop'}
+          </button>
         </div>
 
         {/* Progress Bar */}

@@ -213,6 +213,23 @@ chrome.runtime.onMessage.addListener(
 
 
     // --------------------------------------------------------
+    // Presently wants to STOP early and stitch
+    // everything captured so far.
+    // --------------------------------------------------------
+
+    if (
+      message.type ===
+      'PRESENTLY_LIVE_CAPTURE_STOP'
+    ) {
+
+      stopCapture(
+        message.requestId
+      );
+
+      return;
+    }
+
+    // --------------------------------------------------------
     // Presently cancelled.
     // --------------------------------------------------------
 
@@ -1019,6 +1036,66 @@ async function handleCaptureError(
   );
 }
 
+// ============================================================
+// STOP CAPTURE EARLY
+// ============================================================
+
+async function stopCapture(
+  requestId
+) {
+
+  const session =
+    sessions.get(
+      requestId
+    );
+
+  if (!session) {
+    return;
+  }
+
+  log(
+    requestId,
+    'STOP REQUESTED'
+  );
+
+  // IMPORTANT:
+  // Do NOT mark the session cancelled.
+  //
+  // We still need the target webpage to stitch
+  // the tiles it already has.
+  session.stopRequested = true;
+
+  try {
+
+    if (
+      session.targetTabId
+    ) {
+
+      await chrome.tabs.sendMessage(
+        session.targetTabId,
+        {
+          type:
+            'PRESENTLY_LIVE_CAPTURE_STOP',
+
+          requestId
+        }
+      );
+
+      log(
+        requestId,
+        'STOP SENT TO TARGET PAGE'
+      );
+    }
+
+  } catch (error) {
+
+    console.warn(
+      '[PBG] Could not send STOP to target:',
+      error?.message ||
+      error
+    );
+  }
+}
 
 // ============================================================
 // CANCEL

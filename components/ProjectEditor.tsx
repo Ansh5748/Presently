@@ -2518,7 +2518,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
             <div className={`transition-all duration-300 ${viewMode === 'mobile' ? 'w-[375px] h-[667px] overflow-y-auto border-4 border-slate-800 rounded-[2rem] shadow-2xl bg-slate-800 scrollbar-hide' : 'w-full max-w-[1000px]'}`}>
               <div
                 className="relative bg-white shadow-xl rounded-lg overflow-hidden select-none border border-slate-200 transition-all duration-300 flex flex-col"
-                style={{ width: '100%', cursor: 'crosshair', minHeight: viewMode === 'mobile' ? 'unset' : '600px', height: 'fit-content' }}
+                style={{ width: '100%', cursor: 'crosshair', minHeight: viewMode === 'mobile' ? 'unset' : activePage.imageUrl ? 'unset' : '600px' , height: 'fit-content' }}
                 onClick={handleImageClick}
               >
                 {/* {activePage.imageUrl ? ( */}

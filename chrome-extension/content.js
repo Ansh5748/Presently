@@ -220,6 +220,54 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
         return;
       }
+      
+      // --------------------------------------------------------
+      // STOP CURRENT LIVE CAPTURE
+      //
+      // Presently React -> content.js via window.postMessage
+      // -> background.js via chrome.runtime.sendMessage
+      // --------------------------------------------------------
+
+      if (
+        data.type ===
+        'PRESENTLY_LIVE_CAPTURE_STOP'
+      ) {
+
+        console.log(
+          '[PCT] PRESENTLY → EXTENSION STOP',
+          {
+            requestId:
+              data.requestId
+          }
+        );
+
+        chrome.runtime.sendMessage(
+          {
+            type:
+              'PRESENTLY_LIVE_CAPTURE_STOP',
+
+            requestId:
+              data.requestId
+          }
+        )
+          .then(() => {
+
+            console.log(
+              '[PCT] STOP SENT TO BACKGROUND'
+            );
+
+          })
+          .catch(error => {
+
+            console.error(
+              '[PCT] STOP SEND FAILED',
+              error
+            );
+
+          });
+
+        return;
+      }
     }
   );
 
@@ -426,11 +474,46 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
         message.type ===
         'PRESENTLY_LIVE_CAPTURE_STOP'
       ) {
-        console.log('[PCT] STOP REQUEST RECEIVED VIA RUNTIME MSG');
-        if (captureSession && !captureSession.cancelled) {
-          captureSession.stopRequested = true;
-          finishCapture();
+
+        console.log(
+          '[PCT] STOP REQUEST RECEIVED VIA RUNTIME MSG'
+        );
+
+        if (
+          captureSession &&
+          !captureSession.cancelled
+        ) {
+
+          captureSession.stopRequested =
+            true;
+
+          // If a screenshot is currently in-flight,
+          // receiveCaptureTile() will finish the capture
+          // after that tile arrives.
+          if (
+            captureSession.captureInFlight
+          ) {
+
+            console.log(
+              '[PCT] STOP WAITING FOR IN-FLIGHT TILE'
+            );
+
+          } else {
+
+            console.log(
+              '[PCT] STOP - NO TILE IN FLIGHT - STITCHING NOW'
+            );
+
+            finishCapture()
+              .catch(error => {
+                console.error(
+                  '[PCT] STOP FINISH CAPTURE FAILED',
+                  error
+                );
+              });
+          }
         }
+
         return;
       }
 
@@ -2294,6 +2377,8 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
         cancelled: false,
 
+        stopRequested: false,
+
         captureInFlight: false,
 
         lastRequestedY: null,
@@ -2451,7 +2536,8 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
     if (
       !captureSession ||
-      captureSession.cancelled
+      captureSession.cancelled ||
+      captureSession.stopRequested
     ) {
       return;
     }
@@ -2690,6 +2776,26 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
           )
       }
     );
+
+    // ----------------------------------------------------------
+    // STOP REQUESTED
+    //
+    // The in-flight screenshot has now arrived.
+    // Store it first, then stitch everything captured so far.
+    // ----------------------------------------------------------
+
+    if (
+      captureSession.stopRequested
+    ) {
+
+      console.log(
+        '[PCT] STOP REQUESTED - TILE RECEIVED - STITCHING'
+      );
+
+      await finishCapture();
+
+      return;
+    }
 
     // ----------------------------------------------------------
     // FIRST TILE COMPLETE.
@@ -3002,9 +3108,14 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
     if (
       !captureSession ||
-      captureSession.cancelled
+      captureSession.cancelled ||
+      captureSession.stopRequested
     ) {
 
+      console.log(
+        '[PCT] STOP/CANCEL DETECTED AFTER PAGE SETTLE - NOT REQUESTING NEXT TILE'
+      );
+      
       return;
     }
 
