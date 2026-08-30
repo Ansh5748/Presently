@@ -304,7 +304,7 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({ isOp
               </button>
               <button
                 className={`px-3 sm:px-4 py-2 rounded-lg font-medium text-xs sm:text-sm transition ${tab === 'manage' ? 'bg-indigo-600 text-white shadow' : 'text-slate-600 hover:bg-slate-100'}`}
-                onClick={() => { setTab('manage'); setManageView(null); }}
+                onClick={() => { setTab('manage'); setManageView(null); setShowMobileGroupList(true); }}
               >
                 <Users className="w-3.5 sm:w-4 h-3.5 sm:h-4 inline mr-1" />Manage ({groups.length})
               </button>
