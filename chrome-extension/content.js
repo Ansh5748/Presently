@@ -1987,6 +1987,25 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
           ''
         ).toLowerCase();
 
+      const ariaLabel =
+        (
+          element.getAttribute(
+            'aria-label'
+          ) ||
+          ''
+        ).toLowerCase();
+
+      const role =
+        (
+          element.getAttribute(
+            'role'
+          ) ||
+          ''
+        ).toLowerCase();
+
+      const identity =
+        `${id} ${className} ${ariaLabel} ${role}`;
+
       /*
       * Must span a substantial part of the viewport.
       */
@@ -2028,9 +2047,39 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
       */
       if (
         /(header|navbar|nav-bar|navigation|site-header|main-header|sticky-header|footer|bottom-bar)/i
-          .test(`${id} ${className}`)
+          .test(identity)
       ) {
         score += 3;
+      }
+
+      /*
+      * ----------------------------------------------------------
+      * SEARCH BAR
+      *
+      * Hide a fixed/sticky search bar after the first viewport.
+      *
+      * This intentionally works on BOTH desktop and mobile.
+      *
+      * We require the element to actually be fixed/sticky
+      * because scorePersistentChrome() already rejects normal
+      * page-content elements.
+      * ----------------------------------------------------------
+      */
+      const looksLikeSearchBar =
+        /(search|search-bar|searchbox|search-input|search-container|search-wrapper)/i
+          .test(identity);
+
+      if (
+        looksLikeSearchBar &&
+        rect.height > 0 &&
+        rect.height <= 180 &&
+        (
+          topDistance <= 20 ||
+          bottomDistance <= 20
+        ) &&
+        widthRatio >= 0.35
+      ) {
+        score += 7;
       }
 
       /*
@@ -2129,13 +2178,38 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
           continue;
         }
 
-        captureUiCleanupState.hiddenElements.push({
-          element,
-          originalVisibility
-        });
-
         const rect =
           element.getBoundingClientRect();
+
+        /*
+        * ----------------------------------------------------------
+        * MOBILE BOTTOM NAVIGATION
+        *
+        * Examples:
+        *
+        * Home | Category | Search | Cart
+        *
+        * We hide it after the first screenshot, but remember it
+        * separately so it can be restored ONLY for the final
+        * footer/bottom screenshot.
+        * ----------------------------------------------------------
+        */
+        const isMobileBottomSticky =
+          window.innerWidth <= 768 &&
+          Math.abs(
+            window.innerHeight -
+            rect.bottom
+          ) <= 12 &&
+          rect.height > 0 &&
+          rect.height <= 180 &&
+          rect.width >=
+            window.innerWidth * 0.45;
+
+        captureUiCleanupState.hiddenElements.push({
+          element,
+          originalVisibility,
+          isMobileBottomSticky
+        });
 
         const isTopHeader =
           rect.top <= 8 &&
@@ -2235,6 +2309,56 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
     captureUiCleanupState = null;
   }
 
+  /**
+   * Restore only the mobile bottom navigation.
+   *
+   * This is intentionally separate from
+   * restorePersistentHeadersFooters().
+   *
+   * Header/search/popup-related cleanup remains untouched.
+   */
+  function restoreMobileBottomStickyElements() {
+    if (!captureUiCleanupState) {
+      return;
+    }
+
+    try {
+      let restored = 0;
+
+      for (
+        const item of
+        captureUiCleanupState.hiddenElements
+      ) {
+        if (
+          !item.isMobileBottomSticky
+        ) {
+          continue;
+        }
+
+        try {
+          item.element.style.visibility =
+            item.originalVisibility || '';
+
+          restored++;
+        } catch {
+          // Website may have removed the element.
+        }
+      }
+
+      console.log(
+        '[PCT] MOBILE BOTTOM NAV RESTORED FOR FINAL FOOTER',
+        {
+          restored
+        }
+      );
+
+    } catch (error) {
+      console.warn(
+        '[PCT] MOBILE BOTTOM NAV RESTORE FAILED',
+        error
+      );
+    }
+  }
 
   /**
    * Complete UI cleanup pass.
@@ -3105,6 +3229,20 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
       false
     );
 
+    /*
+    * Re-scan persistent UI after scrolling.
+    *
+    * Some websites create/activate sticky search bars
+    * or bottom navigation only after the page starts moving.
+    */
+    if (
+      captureSession &&
+      !captureSession.cancelled &&
+      !captureSession.stopRequested &&
+      ENABLE_FIXED_HEADER_FOOTER_CLEANUP
+    ) {
+      hidePersistentHeadersFooters();
+    }
 
     if (
       !captureSession ||
@@ -3373,6 +3511,26 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
     );
 
 
+    // ----------------------------------------------------------
+    // FINAL FOOTER SCREENSHOT
+    //
+    // At this point we have reached the real bottom of the
+    // website.
+    //
+    // Keep:
+    //   - header hidden
+    //   - sticky search hidden
+    //   - other persistent UI hidden
+    //
+    // Restore ONLY:
+    //   - mobile bottom navigation
+    //
+    // This makes the bottom navigation appear in the final
+    // footer screenshot only.
+    // ----------------------------------------------------------
+
+    restoreMobileBottomStickyElements();
+
     // Reset duplicate protection because we intentionally
     // want another screenshot at the same Y position.
 
@@ -3385,7 +3543,6 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
     session.isFinalTile =
       true;
-
 
     requestCurrentViewport();
   }
