@@ -3115,7 +3115,7 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
       console.log(
         '[PCT] STOP/CANCEL DETECTED AFTER PAGE SETTLE - NOT REQUESTING NEXT TILE'
       );
-      
+
       return;
     }
 
@@ -3443,7 +3443,8 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
 
       const finalImage =
         await stitchTiles(
-          session.tiles
+          session.tiles,
+          session.stopRequested
         );
 
 
@@ -3539,7 +3540,8 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
   // ============================================================
 
   async function stitchTiles(
-    tiles
+    tiles,
+    stoppedEarly = false
   ) {
 
     if (
@@ -3601,6 +3603,75 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
     const documentCssHeight =
       getDocumentHeight();
 
+    // ----------------------------------------------------------
+    // Determine the height we actually need.
+    //
+    // NORMAL CAPTURE:
+    // Use the complete webpage height.
+    //
+    // STOPPED EARLY:
+    // Use only the portion for which we actually have
+    // screenshot tiles.
+    //
+    // Example:
+    //
+    // tile 1 → scrollY 0
+    // tile 2 → scrollY 676
+    // tile 3 → scrollY 1352
+    //
+    // viewport = 676
+    //
+    // captured height = 1352 + 676 = 2028px
+    //
+    // This prevents the unused part of the full webpage
+    // from becoming white space after STOP.
+    // ----------------------------------------------------------
+
+    let stitchCssHeight =
+      documentCssHeight;
+
+    if (
+      stoppedEarly &&
+      tiles.length > 0
+    ) {
+      const maxCapturedScrollY =
+        Math.max(
+          ...tiles.map(
+            tile =>
+              Number(
+                tile?.scrollY || 0
+              )
+          )
+        );
+
+      const viewportCssHeight =
+        firstImage.naturalHeight /
+        dpr;
+
+      const capturedCssHeight =
+        maxCapturedScrollY +
+        viewportCssHeight;
+
+      stitchCssHeight =
+        Math.min(
+          documentCssHeight,
+          Math.max(
+            viewportCssHeight,
+            capturedCssHeight
+          )
+        );
+
+      console.log(
+        '[PCT] EARLY STOP HEIGHT',
+        {
+          documentCssHeight,
+          maxCapturedScrollY,
+          viewportCssHeight,
+          capturedCssHeight,
+          stitchCssHeight
+        }
+      );
+    }
 
     // ----------------------------------------------------------
     // Desired dimensions before safety scaling.
@@ -3609,17 +3680,14 @@ if (window.__PRESENTLY_CONTENT_SCRIPT_LOADED__) {
     const desiredWidth =
       viewportWidth;
 
-
     const desiredHeight =
       Math.max(
         viewportHeight,
-
         Math.ceil(
-          documentCssHeight *
+          stitchCssHeight *
           dpr
         )
       );
-
 
     // ----------------------------------------------------------
     // High-resolution canvas limits preserving 1:1 full physical pixel width.

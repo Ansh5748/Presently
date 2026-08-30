@@ -499,6 +499,16 @@ export const LiveCaptureModal: React.FC<LiveCaptureModalProps> = ({
               finished = true;
               cleanup();
 
+               console.log(
+                '[LiveCaptureModal] FINAL STOPPED IMAGE RECEIVED',
+                {
+                  device,
+                  requestId,
+                  chunks: expectedTotalChunks,
+                  imageLength: assembledImage.length,
+                }
+              );
+              
               if (assembledImage && assembledImage.length > 500) {
                 resolve(assembledImage);
               } else {
