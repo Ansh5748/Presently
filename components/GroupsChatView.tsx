@@ -57,10 +57,14 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [target, setTarget] = useState<ChatTarget | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const [messageText, setMessageText] = useState('');
   // Visibility selection removed: group messages are scoped to the group by default
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [hasMoreMessages, setHasMoreMessages] = useState(true);
   const [sending, setSending] = useState(false);
+  const shouldScrollToBottomRef = useRef(true);
 
   const [showDMInput, setShowDMInput] = useState(false);
   const [dmSearch, setDmSearch] = useState('');
@@ -201,6 +205,8 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
     // Immediately clear previous messages and show loading state
     setMessages([]);
     setLoadingMessages(true);
+    setHasMoreMessages(true);
+    shouldScrollToBottomRef.current = true;
     void loadMessages();
   }, [target]);
 
@@ -267,7 +273,10 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
   }, [path, groups, groupsLoaded]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (shouldScrollToBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      shouldScrollToBottomRef.current = false;
+    }
   }, [messages]);
 
   useEffect(() => {
@@ -281,27 +290,90 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
     return () => clearTimeout(t);
   }, [dmSearch]);
 
+  useEffect(() => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      if (el.scrollTop < 60 && hasMoreMessages && !loadingOlder && !loadingMessages) {
+        void loadOlderMessages();
+      }
+    };
+    el.addEventListener('scroll', onScroll);
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [hasMoreMessages, loadingOlder, loadingMessages, target, messages]);
+
   const loadMessages = async () => {
     if (!target) return;
     setLoadingMessages(true);
     try {
       let msgs: ChatMessage[] = [];
-      // Try cached messages first
       if (target.kind === 'group') {
         const cached = ApiService.getCachedGroupMessages && ApiService.getCachedGroupMessages(target.groupId, target.subgroupId || undefined);
-        if (cached && cached.length) setMessages(cached);
-        msgs = await ApiService.getGroupMessages(target.groupId, target.subgroupId || undefined);
+        if (cached && cached.length) {
+          const tail = cached.slice(-30);
+          shouldScrollToBottomRef.current = true;
+          setMessages(tail);
+        }
+        msgs = await ApiService.getGroupMessagesPage(target.groupId, target.subgroupId || undefined, undefined, 30);
       } else {
         const cached = ApiService.getCachedDirectMessages && ApiService.getCachedDirectMessages(target.recipientId);
-        if (cached && cached.length) setMessages(cached);
-        msgs = await ApiService.getDirectMessages(target.recipientId);
+        if (cached && cached.length) {
+          const tail = cached.slice(-30);
+          shouldScrollToBottomRef.current = true;
+          setMessages(tail);
+        }
+        msgs = await ApiService.getDirectMessagesPage(target.recipientId, undefined, 30);
       }
-      setMessages(msgs);
+      const tail = msgs.length > 30 ? msgs.slice(-30) : msgs;
+      shouldScrollToBottomRef.current = true;
+      setMessages(tail);
+      setHasMoreMessages(msgs.length >= 30);
     } catch (e) {
       console.error(e);
       setMessages([]);
     } finally {
       setLoadingMessages(false);
+    }
+  };
+
+  const loadOlderMessages = async () => {
+    if (!target) return;
+    if (loadingOlder) return;
+    const oldest = messages[0]?.id;
+    if (!oldest) return;
+    setLoadingOlder(true);
+    shouldScrollToBottomRef.current = false;
+    try {
+      const el = messagesContainerRef.current;
+      const prevScrollHeight = el ? el.scrollHeight : 0;
+      const prevScrollTop = el ? el.scrollTop : 0;
+      let older: ChatMessage[] = [];
+      if (target.kind === 'group') {
+        older = await ApiService.getGroupMessagesPage(target.groupId, target.subgroupId || undefined, oldest, 30);
+      } else {
+        older = await ApiService.getDirectMessagesPage(target.recipientId, oldest, 30);
+      }
+      if (!older || older.length === 0) {
+        setHasMoreMessages(false);
+      } else {
+        setMessages(prev => {
+          const ids = new Set(prev.map(m => m.id));
+          const filtered = older.filter(m => !ids.has(m.id));
+          return [...filtered, ...prev];
+        });
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            if (!el) return;
+            const newScrollHeight = el.scrollHeight;
+            el.scrollTop = newScrollHeight - prevScrollHeight + prevScrollTop;
+          });
+        });
+        setHasMoreMessages(older.length === 30);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingOlder(false);
     }
   };
 
@@ -322,6 +394,7 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
     setMessages(prev => [...prev, optimisticMsg]);
     setMessageText('');
     setSending(true);
+    shouldScrollToBottomRef.current = true;
 
     try {
       let msg: ChatMessage;
@@ -788,17 +861,20 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
             </div>
 
             {/* Messages */}
-            <div className="flex-1 min-w-0 overflow-y-auto p-4 sm:p-6 space-y-4 bg-gradient-to-b from-white to-slate-50 relative">
-              {loadingMessages && (
+            <div ref={messagesContainerRef} className="flex-1 min-w-0 overflow-y-auto p-4 sm:p-6 space-y-4 bg-gradient-to-b from-white to-slate-50 relative">
+              {loadingOlder && messages.length > 0 && (
                 <div className="absolute left-0 right-0 top-2 flex justify-center z-10 pointer-events-none">
-                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/80 text-xs text-slate-600 shadow-sm">
+                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/80 text-xs text-slate-600 shadow-sm backdrop-blur-sm">
                     <Loader2 className="w-4 h-4 animate-spin" />
                     Refreshing...
                   </div>
                 </div>
               )}
-              {loadingMessages && messages.length === 0 && (
-                <div className="text-center text-slate-400 text-sm py-10">Loading messages...</div>
+              {loadingMessages && (
+                <div className="flex items-center justify-center gap-2 text-slate-400 text-sm py-10">
+                  <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
+                  <span>Loading messages...</span>
+                </div>
               )}
               {!loadingMessages && messages.length === 0 && (
                 <div className="text-center text-slate-400 text-sm py-10">

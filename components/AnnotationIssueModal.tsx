@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { X, Send, Tag, Shield, Eye, UserCheck, Clock, CheckCircle2, AlertCircle, ChevronDown, Plus, XCircle, Pencil, Maximize2, Trash2, ChevronRight,  ChevronLeft, MessageSquare, Loader2 } from 'lucide-react';
 import { ApiService } from '../services/apiService';
 import type { Pin, Project, AnnotationIssue, AnnotationMessage, AssigneeOption, AnnotationIssueStatus, MessageVisibility } from '../types';
@@ -74,6 +74,7 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
     isTeamMember: boolean;
   } | null>(null);
   const [messages, setMessages] = useState<AnnotationMessage[]>([]);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
 
   const [assigneeId, setAssigneeId] = useState<string>('');
   const [status, setStatus] = useState<AnnotationIssueStatus>('active');
@@ -95,6 +96,10 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
   const [sendingMsg, setSendingMsg] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loadingMessages, setLoadingMessages] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [hasMoreMessages, setHasMoreMessages] = useState(true);
+  const shouldScrollToBottomRef = useRef(true);
   const [editingPinDetails, setEditingPinDetails] = useState(false);
   const [pinDraftTitle, setPinDraftTitle] = useState('');
   const [pinDraftDescription, setPinDraftDescription] = useState('');
@@ -143,8 +148,58 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
   }, [isOpen, pin]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (shouldScrollToBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      shouldScrollToBottomRef.current = false;
+    }
   }, [messages]);
+
+  const loadOlderMessages = useCallback(async () => {
+    const el = messagesContainerRef.current;
+    if (!el || !issue) return;
+    const oldest = messages[0]?.id;
+    if (!oldest || loadingOlder || loadingMessages) return;
+    setLoadingOlder(true);
+    shouldScrollToBottomRef.current = false;
+    try {
+      const prevScrollHeight = el.scrollHeight;
+      const prevScrollTop = el.scrollTop;
+      const older = await ApiService.getIssueMessagesPage(issue.id, oldest, 30);
+      if (!older || older.length === 0) {
+        setHasMoreMessages(false);
+      } else {
+        setMessages(prev => {
+          const ids = new Set(prev.map(m => m.id));
+          const filtered = older.filter(m => !ids.has(m.id));
+          return [...filtered, ...prev];
+        });
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            if (!el) return;
+            const newScrollHeight = el.scrollHeight;
+            el.scrollTop = newScrollHeight - prevScrollHeight + prevScrollTop;
+          });
+        });
+        setHasMoreMessages(older.length === 30);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [issue, messages, loadingOlder, loadingMessages]);
+
+  useEffect(() => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      if (el.scrollTop < 60 && hasMoreMessages && !loadingOlder && !loadingMessages) {
+        void loadOlderMessages();
+      }
+    };
+    el.addEventListener('scroll', onScroll);
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [hasMoreMessages, loadingOlder, loadingMessages, loadOlderMessages]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -183,6 +238,9 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
   const loadIssue = async () => {
     if (!pin) return;
     setLoading(true);
+    setLoadingMessages(true);
+    setHasMoreMessages(true);
+    shouldScrollToBottomRef.current = true;
     try {
       // Try cached pin issue first for snappy UI
       const cached = ApiService.getCachedPinIssue && ApiService.getCachedPinIssue(pin.id);
@@ -196,9 +254,11 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
         setAssigneeId(existingAssigneeId);
         setStatus(cached.status);
         setLabels(cached.labels || []);
-        // load cached messages too
         const cachedMsgs = ApiService.getCachedIssueMessages && ApiService.getCachedIssueMessages(cached.id);
-        if (cachedMsgs) setMessages(cachedMsgs);
+        if (cachedMsgs && cachedMsgs.length) {
+          shouldScrollToBottomRef.current = true;
+          setMessages(cachedMsgs.slice(-30));
+        }
       }
 
       const existing = await ApiService.getPinIssue(pin.id);
@@ -219,23 +279,33 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
         setStatus('active');
         setLabels([]);
         setMessages([]);
+        setLoadingMessages(false);
       }
     } catch (e) {
       console.error(e);
+      setLoadingMessages(false);
     } finally {
       setLoading(false);
     }
   };
 
   const loadMessages = async (issueId: string) => {
+    setLoadingMessages(true);
     try {
-      // Try cached messages first
       const cached = ApiService.getCachedIssueMessages && ApiService.getCachedIssueMessages(issueId);
-      if (cached && cached.length) setMessages(cached);
-      const msgs = await ApiService.getIssueMessages(issueId);
-      setMessages(msgs);
+      if (cached && cached.length) {
+        shouldScrollToBottomRef.current = true;
+        setMessages(cached.slice(-30));
+      }
+      const msgs = await ApiService.getIssueMessagesPage(issueId, undefined, 30);
+      const tail = msgs.length > 30 ? msgs.slice(-30) : msgs;
+      shouldScrollToBottomRef.current = true;
+      setMessages(tail);
+      setHasMoreMessages(msgs.length >= 30);
     } catch (e) {
       console.error(e);
+    } finally {
+      setLoadingMessages(false);
     }
   };
 
@@ -422,6 +492,7 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
   const sendChatMessage = async () => {
     if (!messageText.trim() || !issue) return;
     setSendingMsg(true);
+    shouldScrollToBottomRef.current = true;
     try {
       // send with chosen visibility
       const msg = await ApiService.sendIssueMessage(issue.id, messageText.trim(), visibility);
@@ -1124,13 +1195,33 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
               <span className="text-xs text-slate-400">{messages.length} message{messages.length === 1 ? '' : 's'}</span>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-4 bg-gradient-to-b from-white to-slate-50">
+            <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-4 bg-gradient-to-b from-white to-slate-50 relative">
+              {loadingOlder && messages.length > 0 && (
+                <div className="absolute left-0 right-0 top-2 flex justify-center z-10 pointer-events-none">
+                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/80 text-xs text-slate-600 shadow-sm backdrop-blur-sm">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Refreshing...
+                  </div>
+                </div>
+              )}
+              {!issue && loading && (
+                <div className="flex items-center justify-center gap-2 text-slate-400 text-sm py-10">
+                  <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
+                  <span>Loading discussion...</span>
+                </div>
+              )}
               {!issue && !loading && (
                 <div className="text-center text-slate-400 text-sm py-10">
                   Create the issue first to start a discussion
                 </div>
               )}
-              {issue && messages.length === 0 && (
+              {issue && (loadingMessages || loading) && messages.length === 0 && (
+                <div className="flex items-center justify-center gap-2 text-slate-400 text-sm py-10">
+                  <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
+                  <span>Loading discussion...</span>
+                </div>
+              )}
+              {issue && !loadingMessages && !loading && messages.length === 0 && (
                 <div className="text-center text-slate-400 text-sm py-10">
                   No messages yet. Start a thread below.
                 </div>

@@ -677,18 +677,37 @@ export const ApiService = {
   },
 
   async getGroupMessages(groupId: string, subgroupId?: string): Promise<ChatMessage[]> {
-    const url = subgroupId
-      ? `${API_BASE}/groups/${groupId}/messages?subgroupId=${encodeURIComponent(subgroupId)}`
-      : `${API_BASE}/groups/${groupId}/messages`;
+    // Backwards-compatible: fetch up to 500 messages (original behaviour)
+    return this.getGroupMessagesPage(groupId, subgroupId, undefined, 500);
+  },
+
+  async getGroupMessagesPage(groupId: string, subgroupId?: string, before?: string | undefined, limit = 30): Promise<ChatMessage[]> {
+    const params = new URLSearchParams();
+    params.set('limit', String(limit));
+    if (before) params.set('before', before);
+    if (subgroupId) params.set('subgroupId', subgroupId);
+    const url = `${API_BASE}/groups/${groupId}/messages?${params.toString()}`;
 
     const response = await authFetch(url);
-
-    if (!response.ok) {
-      throw new Error('Failed to fetch messages');
-    }
-
+    if (!response.ok) throw new Error('Failed to fetch messages');
     const data = (await response.json()) as ChatMessage[];
-    CacheService.set(CACHE_KEYS.GROUP_MESSAGES(CacheService.userId(), groupId, subgroupId || 'general'), data);
+    const key = CACHE_KEYS.GROUP_MESSAGES(CacheService.userId(), groupId, subgroupId || 'general');
+    try {
+      const cached = CacheService.get(key) as ChatMessage[] | null;
+      if (!before) {
+        CacheService.set(key, data);
+      } else {
+        // prepend older messages to cache
+        if (cached && Array.isArray(cached)) {
+          // avoid duplicates by id
+          const ids = new Set(cached.map(m => m.id));
+          const merged = [...data.filter(m => !ids.has(m.id)), ...cached];
+          CacheService.set(key, merged);
+        } else {
+          CacheService.set(key, [...data]);
+        }
+      }
+    } catch {}
     return data;
   },
 
@@ -703,18 +722,44 @@ export const ApiService = {
       throw new Error(error.error || 'Failed to send message');
     }
 
-    return (await response.json()) as ChatMessage;
+    const msg = (await response.json()) as ChatMessage;
+    try {
+      const key = CACHE_KEYS.GROUP_MESSAGES(CacheService.userId(), groupId, data.subgroupId || 'general');
+      const cached = CacheService.get(key) as ChatMessage[] | null;
+      if (cached && Array.isArray(cached)) CacheService.set(key, [...cached, msg]);
+      else CacheService.set(key, [msg]);
+    } catch {}
+    return msg;
   },
 
   async getDirectMessages(recipientId: string): Promise<ChatMessage[]> {
-    const response = await authFetch(`${API_BASE}/messages/direct/${recipientId}`);
+    return this.getDirectMessagesPage(recipientId, undefined, 500);
+  },
 
-    if (!response.ok) {
-      throw new Error('Failed to fetch messages');
-    }
+  async getDirectMessagesPage(recipientId: string, before?: string | undefined, limit = 30): Promise<ChatMessage[]> {
+    const params = new URLSearchParams();
+    params.set('limit', String(limit));
+    if (before) params.set('before', before);
+    const url = `${API_BASE}/messages/direct/${recipientId}?${params.toString()}`;
 
+    const response = await authFetch(url);
+    if (!response.ok) throw new Error('Failed to fetch messages');
     const data = (await response.json()) as ChatMessage[];
-    CacheService.set(CACHE_KEYS.DIRECT_MESSAGES(CacheService.userId(), recipientId), data);
+    const key = CACHE_KEYS.DIRECT_MESSAGES(CacheService.userId(), recipientId);
+    try {
+      const cached = CacheService.get(key) as ChatMessage[] | null;
+      if (!before) {
+        CacheService.set(key, data);
+      } else {
+        if (cached && Array.isArray(cached)) {
+          const ids = new Set(cached.map(m => m.id));
+          const merged = [...data.filter(m => !ids.has(m.id)), ...cached];
+          CacheService.set(key, merged);
+        } else {
+          CacheService.set(key, [...data]);
+        }
+      }
+    } catch {}
     return data;
   },
 
@@ -729,7 +774,14 @@ export const ApiService = {
       throw new Error(error.error || 'Failed to send message');
     }
 
-    return (await response.json()) as ChatMessage;
+    const msg = (await response.json()) as ChatMessage;
+    try {
+      const key = CACHE_KEYS.DIRECT_MESSAGES(CacheService.userId(), recipientId);
+      const cached = CacheService.get(key) as ChatMessage[] | null;
+      if (cached && Array.isArray(cached)) CacheService.set(key, [...cached, msg]);
+      else CacheService.set(key, [msg]);
+    } catch {}
+    return msg;
   },
 
   async getProjectIssues(projectId: string): Promise<AnnotationIssue[]> {
@@ -847,39 +899,35 @@ export const ApiService = {
   },
 
   async getIssueMessages(issueId: string): Promise<AnnotationMessage[]> {
+    // Backwards-compatible: fetch up to 500 messages (original behaviour)
+    return this.getIssueMessagesPage(issueId, undefined, 500);
+  },
+
+  async getIssueMessagesPage(issueId: string, before?: string | undefined, limit = 30): Promise<AnnotationMessage[]> {
+    const params = new URLSearchParams();
+    params.set('limit', String(limit));
+    if (before) params.set('before', before);
+    const url = `${API_BASE}/issues/${issueId}/messages?${params.toString()}`;
+
+    const response = await authFetch(url);
+    if (!response.ok) throw new Error('Failed to fetch issue messages');
+    const data = (await response.json()) as AnnotationMessage[];
     const key = CACHE_KEYS.ISSUE_MESSAGES(CacheService.userId(), issueId);
     try {
       const cached = CacheService.get(key) as AnnotationMessage[] | null;
-      if (cached && cached.length) {
-        // Background refresh
-        (async () => {
-          try {
-            const resp = await authFetch(`${API_BASE}/issues/${issueId}/messages`);
-            if (resp.ok) {
-              const fresh = (await resp.json()) as AnnotationMessage[];
-              CacheService.set(key, fresh);
-            }
-          } catch {}
-        })();
-        return cached;
+      if (!before) {
+        CacheService.set(key, data);
+      } else {
+        if (cached && Array.isArray(cached)) {
+          const ids = new Set(cached.map(m => m.id));
+          const merged = [...data.filter(m => !ids.has(m.id)), ...cached];
+          CacheService.set(key, merged);
+        } else {
+          CacheService.set(key, [...data]);
+        }
       }
-
-      const response = await authFetch(`${API_BASE}/issues/${issueId}/messages`);
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch issue messages');
-      }
-
-      const data = (await response.json()) as AnnotationMessage[];
-      CacheService.set(key, data);
-      return data;
-    } catch (e) {
-      const response = await authFetch(`${API_BASE}/issues/${issueId}/messages`);
-      if (!response.ok) throw new Error('Failed to fetch issue messages');
-      const data = (await response.json()) as AnnotationMessage[];
-      CacheService.set(key, data);
-      return data;
-    }
+    } catch {}
+    return data;
   },
 
   async sendIssueMessage(issueId: string, content: string, visibility: MessageVisibility = 'all'): Promise<AnnotationMessage> {

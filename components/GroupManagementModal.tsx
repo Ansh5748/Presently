@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Plus, Users, Building2, Crown, Shield, UserMinus, Hash, Trash2, Send, Search, MoreVertical, Pencil, Save, ChevronLeft } from 'lucide-react';
+import { X, Plus, Users, Building2, Crown, Shield, UserMinus, Hash, Trash2, Send, Search, MoreVertical, Pencil, Save, ChevronLeft, Loader2 } from 'lucide-react';
 import { ApiService } from '../services/apiService';
 import type { Group, GroupMember, Subgroup, GroupType, MemberRole, UserSearchResult, Project } from '../types';
 
@@ -21,6 +21,7 @@ interface GroupManagementModalProps {
 export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({ isOpen, onClose, onGroupChange, onNavigate, defaultTab, initialGroupId, initialSub, lockToGroup }) => {
   const [tab, setTab] = useState<TabType>('create');
   const [groups, setGroups] = useState<Group[]>([]);
+  const [groupsLoading, setGroupsLoading] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
   const [assigningProjectId, setAssigningProjectId] = useState<string | null>(null);
@@ -66,12 +67,17 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({ isOp
   };
 
   const loadGroups = useCallback(async (applyInitialSelection?: boolean) => {
+    setGroupsLoading(true);
     try {
       // Try cached groups first for instant UI
       const cached = ApiService.getCachedGroups && ApiService.getCachedGroups();
-      if (cached && cached.length) setGroups(cached);
+      if (cached && cached.length) {
+        setGroups(cached);
+        setGroupsLoading(false);
+      }
       const g = await ApiService.getGroups();
       setGroups(g);
+      setGroupsLoading(false);
       if (applyInitialSelection && (initialGroupId || lockToGroup)) {
         const selected = initialGroupId ? g.find(x => x.id === initialGroupId) : g[0];
         if (selected) {
@@ -85,7 +91,10 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({ isOp
         const refreshed = g.find(x => x.id === prev.group.id);
         return refreshed ? { ...prev, group: refreshed } : prev;
       });
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      console.error(e);
+      setGroupsLoading(false);
+    }
   }, [initialGroupId, initialSub, lockToGroup]);
 
   const loadProjects = useCallback(async () => {
@@ -385,7 +394,14 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({ isOp
                     YOUR GROUPS
                   </div>
 
-                  {groups.length === 0 && (
+                  {groupsLoading && groups.length === 0 && (
+                    <div className="flex items-center justify-center gap-2 text-xs text-slate-500 p-5">
+                      <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />
+                      <span>Loading groups...</span>
+                    </div>
+                  )}
+
+                  {!groupsLoading && groups.length === 0 && (
                     <div className="text-xs text-slate-500 p-3 text-center">
                       No groups yet. Create one!
                     </div>

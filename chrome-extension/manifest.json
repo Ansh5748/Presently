@@ -3,7 +3,7 @@
   "name": "Presently Live Capture",
   "short_name": "Presently",
   "version": "1.0.0",
-  "description": "Captures fully rendered webpages in real Chrome for Presently.",
+  "description": "Capture fully rendered webpages for visual review and project delivery with Presently.",
 
   "permissions": [
     "tabs",

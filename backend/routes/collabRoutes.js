@@ -733,6 +733,8 @@ module.exports = function registerCollabRoutes({
     try {
       const { groupId } = req.params;
       const { subgroupId } = req.query;
+      const limit = Math.min(parseInt(req.query.limit || '30', 10) || 30, 500);
+      const before = req.query.before;
       const userId = req.user.id;
       const group = await Group.findOne({ id: groupId });
       if (!group) return res.status(404).json({ error: 'Group not found' });
@@ -751,8 +753,27 @@ module.exports = function registerCollabRoutes({
       if (subgroupId) query.subgroupId = subgroupId.toString();
       else query.subgroupId = { $exists: false };
       if (!isTeamMember) query.visibility = 'all';
-      const messages = await Message.find(query)
-        .populate('senderId', 'name email avatarUrl').sort({ createdAt: 1 }).limit(500);
+
+      // Support cursor-based pagination by `before` message id or ISO date
+      let beforeDate = null;
+      if (before) {
+        // try to find a message by id first
+        const beforeMsg = await Message.findOne({ id: before.toString() }).select('createdAt');
+        if (beforeMsg && beforeMsg.createdAt) beforeDate = beforeMsg.createdAt;
+        else {
+          const parsed = Date.parse(before.toString());
+          if (!isNaN(parsed)) beforeDate = new Date(parsed);
+        }
+      }
+
+      if (beforeDate) query.createdAt = { $lt: beforeDate };
+
+      // fetch newest-first then reverse to return chronological ascending
+      const msgs = await Message.find(query)
+        .populate('senderId', 'name email avatarUrl')
+        .sort({ createdAt: -1 })
+        .limit(limit);
+      const messages = msgs.reverse();
       res.json(messages);
     } catch (error) {
       console.error('[Get Group Messages] Error:', error);
@@ -788,13 +809,32 @@ module.exports = function registerCollabRoutes({
     try {
       const { recipientId } = req.params;
       const userId = req.user.id;
-      const messages = await Message.find({
+      const limit = Math.min(parseInt(req.query.limit || '30', 10) || 30, 500);
+      const before = req.query.before;
+
+      const query = {
         $or: [
           { senderId: new mongoose.Types.ObjectId(userId), directRecipientId: new mongoose.Types.ObjectId(recipientId) },
           { senderId: new mongoose.Types.ObjectId(recipientId), directRecipientId: new mongoose.Types.ObjectId(userId) }
         ]
-      }).populate('senderId', 'name email avatarUrl').populate('directRecipientId', 'name email avatarUrl')
-        .sort({ createdAt: 1 }).limit(500);
+      };
+
+      let beforeDate = null;
+      if (before) {
+        const beforeMsg = await Message.findOne({ id: before.toString() }).select('createdAt');
+        if (beforeMsg && beforeMsg.createdAt) beforeDate = beforeMsg.createdAt;
+        else {
+          const parsed = Date.parse(before.toString());
+          if (!isNaN(parsed)) beforeDate = new Date(parsed);
+        }
+      }
+
+      if (beforeDate) query.createdAt = { $lt: beforeDate };
+
+      const msgs = await Message.find(query)
+        .populate('senderId', 'name email avatarUrl').populate('directRecipientId', 'name email avatarUrl')
+        .sort({ createdAt: -1 }).limit(limit);
+      const messages = msgs.reverse();
       res.json(messages);
     } catch (error) {
       console.error('[Get Direct Messages] Error:', error);
@@ -1065,6 +1105,8 @@ module.exports = function registerCollabRoutes({
   app.get('/issues/:issueId/messages', authenticateToken, async (req, res) => {
     try {
       const { issueId } = req.params;
+      const limit = Math.min(parseInt(req.query.limit || '30', 10) || 30, 500);
+      const before = req.query.before;
       const userId = req.user.id;
       const issue = await AnnotationIssue.findOne({ id: issueId });
       if (!issue) return res.status(404).json({ error: 'Issue not found' });
@@ -1097,8 +1139,22 @@ module.exports = function registerCollabRoutes({
       }
       const query = { annotationIssueId: issue._id };
       if (!isTeamMember) query.visibility = 'all';
-      const messages = await AnnotationMessage.find(query)
-        .populate('senderId', 'name email avatarUrl').sort({ createdAt: 1 }).limit(500);
+
+      let beforeDate = null;
+      if (before) {
+        const beforeMsg = await AnnotationMessage.findOne({ id: before.toString() }).select('createdAt');
+        if (beforeMsg && beforeMsg.createdAt) beforeDate = beforeMsg.createdAt;
+        else {
+          const parsed = Date.parse(before.toString());
+          if (!isNaN(parsed)) beforeDate = new Date(parsed);
+        }
+      }
+
+      if (beforeDate) query.createdAt = { $lt: beforeDate };
+
+      const msgs = await AnnotationMessage.find(query)
+        .populate('senderId', 'name email avatarUrl').sort({ createdAt: -1 }).limit(limit);
+      const messages = msgs.reverse();
       res.json(messages);
     } catch (error) {
       console.error('[Get Issue Messages] Error:', error);
