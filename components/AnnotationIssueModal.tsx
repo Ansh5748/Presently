@@ -90,7 +90,8 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
   const [showHistoryModal, setShowHistoryModal] = useState(false);
 
   const [messageText, setMessageText] = useState('');
-  const [visibility, setVisibility] = useState<MessageVisibility>('all');
+  // Visibility selection: allow choosing 'all' or 'team' for issue messages
+  const [visibility, setVisibility] = useState<MessageVisibility>('team');
   const [sendingMsg, setSendingMsg] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -163,6 +164,13 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
 
   const loadAssigneeOptions = async () => {
     try {
+      // Show cached assignees immediately if available
+      const cached = ApiService.getCachedProjectAssignees && ApiService.getCachedProjectAssignees(project.id);
+      if (cached) {
+        setProjectAssignees(cached.projectAssignees || []);
+        setOtherGroups(cached.otherGroups || []);
+        setAssigneePermissions(cached.permissions || null);
+      }
       const assigneeData = await ApiService.getProjectAssignees(project.id);
       setProjectAssignees(assigneeData.projectAssignees || []);
       setOtherGroups(assigneeData.otherGroups || []);
@@ -176,6 +184,23 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
     if (!pin) return;
     setLoading(true);
     try {
+      // Try cached pin issue first for snappy UI
+      const cached = ApiService.getCachedPinIssue && ApiService.getCachedPinIssue(pin.id);
+      if (cached) {
+        const existingAssigneeId = cached.assigneeId
+          ? (typeof cached.assigneeId === 'object'
+            ? (cached.assigneeId as any)._id || (cached.assigneeId as any).id
+            : cached.assigneeId).toString()
+          : '';
+        setIssue(cached);
+        setAssigneeId(existingAssigneeId);
+        setStatus(cached.status);
+        setLabels(cached.labels || []);
+        // load cached messages too
+        const cachedMsgs = ApiService.getCachedIssueMessages && ApiService.getCachedIssueMessages(cached.id);
+        if (cachedMsgs) setMessages(cachedMsgs);
+      }
+
       const existing = await ApiService.getPinIssue(pin.id);
       if (existing) {
         const existingAssigneeId = existing.assigneeId
@@ -204,6 +229,9 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
 
   const loadMessages = async (issueId: string) => {
     try {
+      // Try cached messages first
+      const cached = ApiService.getCachedIssueMessages && ApiService.getCachedIssueMessages(issueId);
+      if (cached && cached.length) setMessages(cached);
       const msgs = await ApiService.getIssueMessages(issueId);
       setMessages(msgs);
     } catch (e) {
@@ -395,6 +423,7 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
     if (!messageText.trim() || !issue) return;
     setSendingMsg(true);
     try {
+      // send with chosen visibility
       const msg = await ApiService.sendIssueMessage(issue.id, messageText.trim(), visibility);
       setMessages(prev => [...prev, msg]);
       setMessageText('');
@@ -533,7 +562,8 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
     return collapsed;
   })();
 
-  const getHistoryColors = (n: any) => {
+  const getHistoryColors = (n: { isCreator?: boolean; assigneeChanged?: boolean; assignedByMe?: boolean; assignedToMe?: boolean; status?: AnnotationIssueStatus }) => {
+    const statusKey: AnnotationIssueStatus = (n.status || 'active') as AnnotationIssueStatus;
     if (n.isCreator) {
       return {
         dotClass: 'bg-red-500',
@@ -543,23 +573,23 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
     if (n.assigneeChanged) {
       if (n.assignedByMe) {
         return {
-          dotClass: STATUS_DOT[n.status],
+          dotClass: STATUS_DOT[statusKey],
           nameClass: 'text-black font-semibold'
         };
       }
       return {
-        dotClass: STATUS_DOT[n.status],
+        dotClass: STATUS_DOT[statusKey],
         nameClass: 'text-slate-800 font-semibold'
       };
     } else {
       if (n.assignedToMe) {
         return {
-          dotClass: STATUS_DOT[n.status],
-          nameClass: `${STATUS_TEXT[n.status]} font-bold`
+          dotClass: STATUS_DOT[statusKey],
+          nameClass: `${STATUS_TEXT[statusKey]} font-bold`
         };
       }
       return {
-        dotClass: STATUS_DOT[n.status],
+        dotClass: STATUS_DOT[statusKey],
         nameClass: 'text-slate-800 font-semibold'
       };
     }
@@ -1105,36 +1135,45 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
                   No messages yet. Start a thread below.
                 </div>
               )}
-              {messages.map(m => {
-                const mine = (typeof m.senderId === 'object' ? m.senderId._id : m.senderId) === currentUserId;
-                const teamOnly = m.visibility === 'team';
-                const senderAvatar = getSenderAvatar(m.senderId, mine);
-                return (
-                  <div key={m.id} className={`flex gap-3 ${mine ? 'flex-row-reverse' : ''}`}>
-                    {senderAvatar ? (
-                      <img src={senderAvatar} alt={getSenderName(m.senderId)} className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
-                    ) : (
-                      <div className={`w-8 h-8 rounded-full bg-gradient-to-br ${mine ? 'from-indigo-500 to-purple-600' : 'from-emerald-400 to-teal-500'} text-white text-xs font-semibold flex items-center justify-center flex-shrink-0`}>
-                        {getSenderInitial(m.senderId)}
-                      </div>
-                    )}
-                    <div className={`max-w-[78%] ${mine ? 'items-end' : 'items-start'} flex flex-col`}>
-                      <div className={`flex items-center gap-2 text-xs text-slate-500 mb-1 ${mine ? 'flex-row-reverse' : ''}`}>
-                        <span className="font-medium text-slate-600">{getSenderName(m.senderId)}</span>
-                        <span>{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                        {teamOnly && (
-                          <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 rounded border border-indigo-100 flex items-center gap-1">
-                            <Shield className="w-3 h-3" />team only
-                          </span>
-                        )}
-                      </div>
-                      <div className={`px-4 py-2.5 rounded-2xl whitespace-pre-wrap break-words ${mine ? 'bg-indigo-600 text-white rounded-br-md' : 'bg-white border border-slate-200 text-slate-700 rounded-bl-md shadow-sm'}`}>
-                        {m.content}
+              {(() => {
+                const filtered = messages.filter(m => {
+                  if (!m) return false;
+                  if (m.visibility !== 'team') return true; // 'all' or unspecified
+                  const mine = (typeof m.senderId === 'object' ? m.senderId._id : m.senderId) === currentUserId;
+                  // team-only messages are visible only to team members or the sender
+                  return mine || isTeamMember;
+                });
+                return filtered.map(m => {
+                  const mine = (typeof m.senderId === 'object' ? m.senderId._id : m.senderId) === currentUserId;
+                  const teamOnly = m.visibility === 'team';
+                  const senderAvatar = getSenderAvatar(m.senderId, mine);
+                  return (
+                    <div key={m.id} className={`flex gap-3 ${mine ? 'flex-row-reverse' : ''}`}>
+                      {senderAvatar ? (
+                        <img src={senderAvatar} alt={getSenderName(m.senderId)} className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
+                      ) : (
+                        <div className={`w-8 h-8 rounded-full bg-gradient-to-br ${mine ? 'from-indigo-500 to-purple-600' : 'from-emerald-400 to-teal-500'} text-white text-xs font-semibold flex items-center justify-center flex-shrink-0`}>
+                          {getSenderInitial(m.senderId)}
+                        </div>
+                      )}
+                      <div className={`max-w-[78%] ${mine ? 'items-end' : 'items-start'} flex flex-col`}>
+                        <div className={`flex items-center gap-2 text-xs text-slate-500 mb-1 ${mine ? 'flex-row-reverse' : ''}`}>
+                          <span className="font-medium text-slate-600">{getSenderName(m.senderId)}</span>
+                          <span>{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                          {teamOnly && (
+                            <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 rounded border border-indigo-100 flex items-center gap-1">
+                              <Shield className="w-3 h-3" />team only
+                            </span>
+                          )}
+                        </div>
+                        <div className={`px-4 py-2.5 rounded-2xl whitespace-pre-wrap break-words ${mine ? 'bg-indigo-600 text-white rounded-br-md' : 'bg-white border border-slate-200 text-slate-700 rounded-bl-md shadow-sm'}`}>
+                          {m.content}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                });
+              })()}
               <div ref={messagesEndRef} />
             </div>
 

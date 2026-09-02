@@ -46,12 +46,29 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
   useEffect(() => {
     const u = StorageService.getUser() as any;
     setCurrentUserId((u?.userId || u?.id || '').toString());
+    // Prefill from cache for snappy UI, then refresh
+    const cached = ApiService.getCachedProjects && ApiService.getCachedProjects();
+    if (cached) {
+      const p = cached.find(c => c.id === projectId) || null;
+      if (p) {
+        setProject(p);
+        if (p.pages && p.pages.length > 0) setActivePageId(p.pages[0].id);
+      }
+    }
     loadProject();
   }, [projectId, isLiveView]);
 
   const loadProject = async () => {
     try {
       const view = isLiveView ? 'live' : 'draft';
+      // Try cached project and pins first
+      const cachedProject = ApiService.getCachedProjects && ApiService.getCachedProjects()?.find(p => p.id === projectId);
+      if (cachedProject) {
+        setProject(cachedProject);
+        if (cachedProject.pages.length > 0) setActivePageId(cachedProject.pages[0].id);
+      }
+      const cachedPins = ApiService.getCachedProjects ? (ApiService.getCachedProjects()?.find(p => p.id === projectId)?.pages ? [] : null) : null; // placeholder
+
       const projectData = await ApiService.getProject(projectId, view);
       setProject(projectData);
 

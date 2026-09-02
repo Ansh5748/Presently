@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { StorageService } from '../services/storageService';
 import { ApiService } from '../services/apiService';
 import { fetchScreenshotAsBase64 } from '../services/screenshotService';
-import { refineText } from '../services/geminiService';
 import { SubscriptionModal } from './SubscriptionModal';
 import { AnnotationIssueModal } from './AnnotationIssueModal';
 import { LiveCaptureModal } from './LiveCaptureModal';
@@ -1178,11 +1177,27 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       setUserEmail(user.email);
       setIsLocalComputeEnabled(user.isLocalComputeEnabled || false);
     }
+    // Prefill synchronously from cache for faster first render
+    const cached = ApiService.getCachedProjects && ApiService.getCachedProjects();
+    if (cached) {
+      const p = cached.find(c => c.id === projectId) || null;
+      if (p) {
+        setProject(p);
+        if (p.pages && p.pages.length > 0) setActivePageId(p.pages[0].id);
+      }
+    }
     loadProject();
   }, [projectId]);
 
   const loadProject = async () => {
     try {
+      // Try cache-first to improve perceived load time
+      const cachedProject = ApiService.getCachedProjects && ApiService.getCachedProjects()?.find(p => p.id === projectId);
+      if (cachedProject) {
+        setProject(cachedProject);
+        if (cachedProject.pages.length > 0 && !activePageId) setActivePageId(cachedProject.pages[0].id);
+      }
+
       const projectData = await ApiService.getProject(projectId);
       setProject(projectData);
 
@@ -1473,23 +1488,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
     openPinEditor(pin);
   };
 
-  const handleRefineWithAI = async () => {
-    if (!tempPin?.description) return;
-    setAiLoading(true);
-    try {
-      const polished = await refineText(tempPin.description);
-      setTempPin({ ...tempPin, description: polished });
-    } catch (error: any) {
-      if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
-        StorageService.clearUser();
-        onNavigate('/login');
-        return;
-      }
-      alert('AI refinement failed');
-    } finally {
-      setAiLoading(false);
-    }
-  };
+  
 
   const handlePublish = async () => {
     if (!project) return;
@@ -2654,14 +2653,6 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
                 <div>
                   <div className="flex justify-between items-center mb-1">
                     <label className="block text-xs font-semibold text-slate-500 uppercase">Explanation</label>
-                    <button
-                      onClick={handleRefineWithAI}
-                      disabled={aiLoading || !tempPin.description}
-                      className="hidden text-xs flex items-center gap-1 text-purple-600 hover:text-purple-700 font-medium disabled:opacity-50"
-                    >
-                      <Sparkles size={12} />
-                      {aiLoading ? 'Refining...' : 'AI Rewrite'}
-                    </button>
                   </div>
                   <textarea
                     className="w-full bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm text-black focus:ring-2 focus:ring-blue-500 focus:outline-none min-h-[100px]"

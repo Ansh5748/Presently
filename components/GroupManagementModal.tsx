@@ -67,6 +67,9 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({ isOp
 
   const loadGroups = useCallback(async (applyInitialSelection?: boolean) => {
     try {
+      // Try cached groups first for instant UI
+      const cached = ApiService.getCachedGroups && ApiService.getCachedGroups();
+      if (cached && cached.length) setGroups(cached);
       const g = await ApiService.getGroups();
       setGroups(g);
       if (applyInitialSelection && (initialGroupId || lockToGroup)) {
@@ -87,7 +90,14 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({ isOp
 
   const loadProjects = useCallback(async () => {
     try {
-      setProjectsLoading(true);
+      // Read cached projects for instant UI, then refresh
+      const cached = ApiService.getCachedProjects && ApiService.getCachedProjects();
+      if (cached && cached.length) {
+        setProjects(cached);
+        setProjectsLoading(false);
+      } else {
+        setProjectsLoading(true);
+      }
       const data = await ApiService.getProjects();
       setProjects(data);
     } catch (e) {
@@ -369,8 +379,8 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({ isOp
             </div>
           ) : (
             <>
-              {!lockToGroup && showMobileGroupList && (
-                <div className="w-full md:w-64 border-b md:border-b-0 md:border-r bg-slate-50 p-3 overflow-y-auto flex-shrink-0 md:flex-shrink-0 max-h-[35vh] md:max-h-none">
+              {!lockToGroup && (
+                <div className={`${showMobileGroupList ? 'block' : 'hidden'} md:block w-full md:w-64 border-b md:border-b-0 md:border-r bg-slate-50 p-3 overflow-y-auto flex-shrink-0 md:flex-shrink-0 max-h-[35vh] md:max-h-none`}>
                   <div className="text-xs font-semibold uppercase text-slate-500 px-2 py-2">
                     YOUR GROUPS
                   </div>
@@ -393,7 +403,10 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({ isOp
                       <button
                         onClick={() => {
                           setManageView({ group: g, sub: 'info' });
-                          setShowMobileGroupList(false);
+                          // Only hide the groups list on small screens (mobile). Keep it visible on desktop (md+).
+                          if (typeof window !== 'undefined' && !window.matchMedia('(min-width: 768px)').matches) {
+                            setShowMobileGroupList(false);
+                          }
                         }}
                         className="w-full text-left"
                       >

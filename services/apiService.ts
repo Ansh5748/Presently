@@ -84,6 +84,14 @@ const CacheService = {
       // ignore storage errors
     }
   },
+  get: (key: string) => {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  },
   invalidate: (key: string) => {
     try {
       localStorage.removeItem(key);
@@ -134,15 +142,42 @@ const pinListPrefix = (projectId: string, view = '') => {
 
 export const ApiService = {
   async getProjects(): Promise<Project[]> {
-    const response = await authFetch(`${API_BASE}/projects`);
+    // Return cached projects immediately if available to improve perceived load times,
+    // then refresh the cache in the background.
+    try {
+      const key = CACHE_KEYS.PROJECTS(CacheService.userId());
+      const cached = CacheService.get(key) as Project[] | null;
+      if (cached && cached.length) {
+        // Kick off a background refresh but don't await it
+        (async () => {
+          try {
+            const resp = await authFetch(`${API_BASE}/projects`);
+            if (resp.ok) {
+              const fresh = (await resp.json()) as Project[];
+              CacheService.set(key, fresh);
+            }
+          } catch {}
+        })();
+        return cached;
+      }
 
-    if (!response.ok) {
-      throw new Error('Failed to fetch projects');
+      const response = await authFetch(`${API_BASE}/projects`);
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch projects');
+      }
+
+      const data = (await response.json()) as Project[];
+      CacheService.set(CACHE_KEYS.PROJECTS(CacheService.userId()), data);
+      return data;
+    } catch (err) {
+      // Fallback to network call if cache read caused issues
+      const response = await authFetch(`${API_BASE}/projects`);
+      if (!response.ok) throw new Error('Failed to fetch projects');
+      const data = (await response.json()) as Project[];
+      CacheService.set(CACHE_KEYS.PROJECTS(CacheService.userId()), data);
+      return data;
     }
-
-    const data = (await response.json()) as Project[];
-    CacheService.set(CACHE_KEYS.PROJECTS(CacheService.userId()), data);
-    return data;
   },
 
   async getProject(projectId: string, view?: 'draft' | 'live'): Promise<Project> {
@@ -710,18 +745,46 @@ export const ApiService = {
   },
 
   async getPinIssue(pinId: string): Promise<AnnotationIssue | null> {
-    const response = await authFetch(`${API_BASE}/pins/${pinId}/issue`);
-
-    if (!response.ok) {
-      if (response.status === 403) {
-        return null;
+    const key = CACHE_KEYS.PIN_ISSUE(CacheService.userId(), pinId);
+    try {
+      const cached = CacheService.get(key) as AnnotationIssue | null;
+      if (cached) {
+        // Refresh in background
+        (async () => {
+          try {
+            const resp = await authFetch(`${API_BASE}/pins/${pinId}/issue`);
+            if (resp.ok) {
+              const fresh = (await resp.json()) as AnnotationIssue | null;
+              CacheService.set(key, fresh);
+            }
+          } catch {}
+        })();
+        return cached;
       }
-      throw new Error('Failed to fetch issue');
-    }
 
-    const data = (await response.json()) as AnnotationIssue | null;
-    CacheService.set(CACHE_KEYS.PIN_ISSUE(CacheService.userId(), pinId), data);
-    return data;
+      const response = await authFetch(`${API_BASE}/pins/${pinId}/issue`);
+
+      if (!response.ok) {
+        if (response.status === 403) {
+          return null;
+        }
+        throw new Error('Failed to fetch issue');
+      }
+
+      const data = (await response.json()) as AnnotationIssue | null;
+      CacheService.set(key, data);
+      return data;
+    } catch (e) {
+      // final attempt network-only
+      const response = await authFetch(`${API_BASE}/pins/${pinId}/issue`);
+      if (!response.ok) {
+        if (response.status === 403) return null;
+        throw new Error('Failed to fetch issue');
+      }
+      const data = (await response.json()) as AnnotationIssue | null;
+      CacheService.set(key, data);
+      return data;
+    }
   },
 
   async deletePinIssue(pinId: string): Promise<unknown> {
@@ -784,15 +847,39 @@ export const ApiService = {
   },
 
   async getIssueMessages(issueId: string): Promise<AnnotationMessage[]> {
-    const response = await authFetch(`${API_BASE}/issues/${issueId}/messages`);
+    const key = CACHE_KEYS.ISSUE_MESSAGES(CacheService.userId(), issueId);
+    try {
+      const cached = CacheService.get(key) as AnnotationMessage[] | null;
+      if (cached && cached.length) {
+        // Background refresh
+        (async () => {
+          try {
+            const resp = await authFetch(`${API_BASE}/issues/${issueId}/messages`);
+            if (resp.ok) {
+              const fresh = (await resp.json()) as AnnotationMessage[];
+              CacheService.set(key, fresh);
+            }
+          } catch {}
+        })();
+        return cached;
+      }
 
-    if (!response.ok) {
-      throw new Error('Failed to fetch issue messages');
+      const response = await authFetch(`${API_BASE}/issues/${issueId}/messages`);
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch issue messages');
+      }
+
+      const data = (await response.json()) as AnnotationMessage[];
+      CacheService.set(key, data);
+      return data;
+    } catch (e) {
+      const response = await authFetch(`${API_BASE}/issues/${issueId}/messages`);
+      if (!response.ok) throw new Error('Failed to fetch issue messages');
+      const data = (await response.json()) as AnnotationMessage[];
+      CacheService.set(key, data);
+      return data;
     }
-
-    const data = (await response.json()) as AnnotationMessage[];
-    CacheService.set(CACHE_KEYS.ISSUE_MESSAGES(CacheService.userId(), issueId), data);
-    return data;
   },
 
   async sendIssueMessage(issueId: string, content: string, visibility: MessageVisibility = 'all'): Promise<AnnotationMessage> {
@@ -806,6 +893,83 @@ export const ApiService = {
       throw new Error(error.error || 'Failed to send message');
     }
 
-    return (await response.json()) as AnnotationMessage;
+    const msg = (await response.json()) as AnnotationMessage;
+    try {
+      const key = CACHE_KEYS.ISSUE_MESSAGES(CacheService.userId(), issueId);
+      const cached = CacheService.get(key) as AnnotationMessage[] | null;
+      if (cached && Array.isArray(cached)) {
+        CacheService.set(key, [...cached, msg]);
+      } else {
+        CacheService.set(key, [msg]);
+      }
+    } catch {}
+    return msg;
+  }
+  ,
+  // Cache-read helpers (synchronous) to enable immediate UI rendering from localStorage
+  getCachedProjects(): Project[] | null {
+    try {
+      const key = CACHE_KEYS.PROJECTS(CacheService.userId());
+      return CacheService.get(key) as Project[] | null;
+    } catch {
+      return null;
+    }
+  },
+  getCachedGroups(): Group[] | null {
+    try {
+      const key = CACHE_KEYS.GROUPS(CacheService.userId());
+      return CacheService.get(key) as Group[] | null;
+    } catch {
+      return null;
+    }
+  },
+  getCachedGroupMessages(groupId: string, subgroupId?: string): ChatMessage[] | null {
+    try {
+      const key = CACHE_KEYS.GROUP_MESSAGES(CacheService.userId(), groupId, subgroupId || 'general');
+      return CacheService.get(key) as ChatMessage[] | null;
+    } catch {
+      return null;
+    }
+  },
+  getCachedDirectMessages(recipientId: string): ChatMessage[] | null {
+    try {
+      const key = CACHE_KEYS.DIRECT_MESSAGES(CacheService.userId(), recipientId);
+      return CacheService.get(key) as ChatMessage[] | null;
+    } catch {
+      return null;
+    }
+  },
+  getCachedMyProfile(): UserProfile | null {
+    try {
+      const key = CACHE_KEYS.MY_PROFILE(CacheService.userId());
+      return CacheService.get(key) as UserProfile | null;
+    } catch {
+      return null;
+    }
+  }
+  ,
+  getCachedProjectAssignees(projectId: string): { projectAssignees: AssigneeOption[]; otherGroups: { id: string; name: string; type: GroupType; members: AssigneeOption[] }[]; permissions: { isProjectGroupMember: boolean; canAssign: boolean; canCrossGroupSearch: boolean; isTeamMember: boolean } } | null {
+    try {
+      const key = CACHE_KEYS.PROJECT_ASSIGNEES(CacheService.userId(), projectId);
+      return CacheService.get(key) as any || null;
+    } catch {
+      return null;
+    }
+  },
+  getCachedPinIssue(pinId: string): AnnotationIssue | null {
+    try {
+      const key = CACHE_KEYS.PIN_ISSUE(CacheService.userId(), pinId);
+      return CacheService.get(key) as AnnotationIssue | null;
+    } catch {
+      return null;
+    }
+  },
+  getCachedIssueMessages(issueId: string): AnnotationMessage[] | null {
+    try {
+      const key = CACHE_KEYS.ISSUE_MESSAGES(CacheService.userId(), issueId);
+      return CacheService.get(key) as AnnotationMessage[] | null;
+    } catch {
+      return null;
+    }
   }
 };

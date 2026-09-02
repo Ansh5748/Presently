@@ -24,7 +24,9 @@ interface DashboardProps {
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) => {
+  const safeLower = (v?: string) => (v || '').toLowerCase();
   const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(true);
   const [groups, setGroups] = useState<Group[]>([]);
   const [isCreating, setIsCreating] = useState(false);
   const [newProjectData, setNewProjectData] = useState<{ name: string; websiteUrl: string; clientName: string; groupId: string; mode: ProjectMode }>({ name: '', websiteUrl: '', clientName: '', groupId: 'none', mode: 'present' });
@@ -62,7 +64,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
     const user = StorageService.getUser() as any;
     if (user) {
       setUserName(user.name);
-      setUserEmail(user.email);
+      setUserEmail(user.email || '');
       setIsLocalComputeEnabled(user.isLocalComputeEnabled || false);
       void Promise.all([
         loadProjects(),
@@ -70,11 +72,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
         checkSubscription()
       ]);
       
-      if (!user.isLocalComputeEnabled && !SPECIAL_EMAILS.includes(user.email.toLowerCase())) {
+      if (!user.isLocalComputeEnabled && !SPECIAL_EMAILS.includes(safeLower(user.email))) {
         setShowPermissionModal(true);
       }
 
-      if (user.email === 'divyanshgupta5748@gmail.com') {
+      if (safeLower(user.email) === 'divyanshgupta5748@gmail.com') {
         loadAdminData();
       }
     } else {
@@ -84,6 +86,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
 
   const loadProjects = async () => {
     try {
+      setProjectsLoading(true);
       const projectsData = await ApiService.getProjects();
       setProjects(projectsData);
     } catch (error) {
@@ -93,6 +96,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
         return;
       }
       console.error('[Dashboard] Failed to load projects:', error);
+    } finally {
+      setProjectsLoading(false);
     }
   };
 
@@ -177,7 +182,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
   };
 
   const handleNewProjectClick = () => {
-    if (SPECIAL_EMAILS.includes(userEmail.toLowerCase())) {
+    if (SPECIAL_EMAILS.includes(safeLower(userEmail))) {
       setIsCreating(true);
       return;
     }
@@ -389,10 +394,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
 
   // Filter Projects
   const filteredProjects = projects.filter(p => {
-    const query = searchQuery.toLowerCase();
-    const matchesSearch = p.name.toLowerCase().includes(query) || 
-                          (p.clientName && p.clientName.toLowerCase().includes(query)) ||
-                          (p.websiteUrl && p.websiteUrl.toLowerCase().includes(query));
+    const query = safeLower(searchQuery);
+    const matchesSearch = (p.name || '').toLowerCase().includes(query) || 
+                          (p.clientName && (p.clientName || '').toLowerCase().includes(query)) ||
+                          (p.websiteUrl && (p.websiteUrl || '').toLowerCase().includes(query));
     if (!matchesSearch) return false;
 
     if (filterStatus === 'draft') return p.status === ProjectStatus.DRAFT;
@@ -657,7 +662,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
         </div>
 
         {/* Projects Grid */}
-        {filteredProjects.length === 0 ? (
+        {projectsLoading ? (
+          <div className="text-center py-16 bg-white rounded-2xl border border-slate-200/80 p-8 shadow-2xs mb-12" role="status" aria-busy={true}>
+            <Loader2 className="mx-auto text-slate-400 animate-spin" size={28} />
+            <h3 className="text-base font-bold text-slate-900 mt-4">Loading...</h3>
+            <p className="text-slate-500 text-xs mt-2">This may take a moment</p>
+          </div>
+        ) : filteredProjects.length === 0 ? (
           <div className="text-center py-16 bg-white rounded-2xl border border-slate-200/80 border-dashed p-8 shadow-2xs mb-12">
             <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-3 border border-blue-100">
               <FolderGit2 size={24} />

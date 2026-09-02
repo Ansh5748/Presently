@@ -68,6 +68,11 @@ export class ErrorBoundary extends Component<Props, State> {
                 </p>
               </div>
             )}
+            {this.state.errorInfo && (
+              <div className="bg-white/80 border border-slate-100 rounded-md p-3 mb-4 text-left text-[12px] text-slate-500 overflow-auto max-h-40">
+                <pre className="whitespace-pre-wrap break-words">{this.state.errorInfo.componentStack}</pre>
+              </div>
+            )}
 
             <div className="flex flex-col sm:flex-row gap-3 justify-center">
               <button
