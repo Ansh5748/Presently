@@ -68,7 +68,8 @@ const projectSchema = new mongoose.Schema({
   },
   assignedUserIds: [{
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
+    ref: 'User',
+    index: true
   }],
   pages: [projectPageSchema],
   status: {
@@ -85,6 +86,25 @@ const projectSchema = new mongoose.Schema({
     type: Date,
     default: Date.now
   }
+});
+projectSchema.index({
+  userId: 1,
+  createdAt: -1
+});
+
+projectSchema.index({
+  groupId: 1,
+  createdAt: -1
+});
+
+projectSchema.index({
+  groupIds: 1,
+  createdAt: -1
+});
+
+projectSchema.index({
+  assignedUserIds: 1,
+  createdAt: -1
 });
 
 module.exports = mongoose.model('Project', projectSchema);

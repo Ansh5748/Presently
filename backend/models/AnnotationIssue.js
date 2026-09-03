@@ -69,4 +69,13 @@ annotationIssueSchema.pre('save', function(next) {
   next();
 });
 
+annotationIssueSchema.index({
+  projectId: 1,
+  createdAt: -1
+});
+
+annotationIssueSchema.index({
+  pinId: 1
+});
+
 module.exports = mongoose.model('AnnotationIssue', annotationIssueSchema);

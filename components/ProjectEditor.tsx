@@ -1177,73 +1177,112 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       setUserEmail(user.email);
       setIsLocalComputeEnabled(user.isLocalComputeEnabled || false);
     }
-    // Prefill synchronously from cache for faster first render
-    const cached = ApiService.getCachedProjects && ApiService.getCachedProjects();
-    if (cached) {
-      const p = cached.find(c => c.id === projectId) || null;
-      if (p) {
-        setProject(p);
-        if (p.pages && p.pages.length > 0) setActivePageId(p.pages[0].id);
+    // Prefill synchronously from the full project cache.
+    const cachedProject = ApiService.getCachedProject(projectId);
+
+    if (cachedProject) {
+      setProject(cachedProject);
+
+      if (cachedProject.pages?.length > 0) {
+        setActivePageId(cachedProject.pages[0].id);
       }
     }
-    loadProject();
+
+    void loadProject();
   }, [projectId]);
 
   const loadProject = async () => {
     try {
-      // Try cache-first to improve perceived load time
-      const cachedProject = ApiService.getCachedProjects && ApiService.getCachedProjects()?.find(p => p.id === projectId);
+      const cachedProject = ApiService.getCachedProject(projectId);
       if (cachedProject) {
         setProject(cachedProject);
         if (cachedProject.pages.length > 0 && !activePageId) setActivePageId(cachedProject.pages[0].id);
+        setLoading(false);
       }
 
-      const projectData = await ApiService.getProject(projectId);
+      const [projectData, pinsData] = await Promise.all([
+        ApiService.getProject(projectId),
+        ApiService.getPins(projectId)
+      ]);
+
       setProject(projectData);
 
-      if (projectData.pages.length > 0 && !activePageId) {
+      if (projectData.pages?.length > 0 && !activePageId) {
         setActivePageId(projectData.pages[0].id);
       }
 
-      const pinsData = await ApiService.getPins(projectId);
       setPins(pinsData);
 
-      try {
-        const issuesData = await ApiService.getProjectIssues(projectId);
-        setProjectIssues(issuesData);
-      } catch { setProjectIssues([]); }
+      const [issuesResult, assigneeResult] = await Promise.allSettled([
+        ApiService.getProjectIssues(projectId),
+        ApiService.getProjectAssignees(projectId)
+      ]);
 
-      try {
-        const assigneeData = await ApiService.getProjectAssignees(projectId);
+      // Issues
+      if (issuesResult.status === 'fulfilled') {
+        setProjectIssues(issuesResult.value);
+      } else {
+        setProjectIssues([]);
+      }
+
+      // Assignees + permissions
+      if (assigneeResult.status === 'fulfilled') {
+        const assigneeData = assigneeResult.value;
+
         const allOpts = [
           ...(assigneeData.projectAssignees || []),
           ...((assigneeData.otherGroups || []).flatMap(g => g.members || []))
         ];
-        const uniq = new Map<string, { id: string; name: string; avatarUrl?: string; designation?: string }>();
+
+        const uniq = new Map<
+          string,
+          { id: string; name: string; avatarUrl?: string; designation?: string }
+        >();
+
         allOpts.forEach((a: any) => {
           const id = (a._id || a.id || a.userId)?.toString?.();
           if (!id) return;
           if (uniq.has(id)) return;
-          uniq.set(id, { id, name: a.name || 'User', avatarUrl: a.avatarUrl, designation: a.designation });
+
+          uniq.set(id, {
+            id,
+            name: a.name || 'User',
+            avatarUrl: a.avatarUrl,
+            designation: a.designation
+          });
         });
+
         setAssigneeOptions(Array.from(uniq.values()));
-        const perm = assigneeData.permissions || {} as any;
+
+        const perm = assigneeData.permissions || ({} as any);
+
         setIsGroupMember(!!perm.isProjectGroupMember);
         setIsTeamMember(!!perm.isTeamMember);
+
         const isQAOrTester = (() => {
           try {
             const u = StorageService.getUser() as any;
             const e = u?.email?.toLowerCase() || '';
+
             if (SPECIAL_EMAILS.includes(e)) return true;
-            if (projectData.userId?.toString?.() === currentUserId.toString()) return true;
-          } catch { }
+
+            if (projectData.userId?.toString?.() === currentUserId.toString()) {
+              return true;
+            }
+          } catch {}
+
           return false;
         })();
+
         const canAssignOrQA = !!perm.canAssign || isQAOrTester;
+
         setIsPMorOwner(canAssignOrQA);
         setCanAssignFilterAssignees(canAssignOrQA);
-      } catch (e: any) {
-        console.warn('[loadProject] assignee load failed', e);
+      } else {
+        console.warn(
+          '[loadProject] assignee load failed',
+          assigneeResult.reason
+        );
       }
     } catch (error: any) {
       if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {

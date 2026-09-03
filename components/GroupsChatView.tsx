@@ -97,32 +97,24 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
     return timeZoneOptions.filter(o => o.searchText.includes(q)).slice(0, 60);
   }, [timeZoneOptions, timeZoneQuery]);
 
-  const loadGroups = useCallback(async () => {
+  const loadGroups = async () => {
     try {
-      // Prefill from cache for snappy UI
-      const cached = ApiService.getCachedGroups && ApiService.getCachedGroups();
-      if (cached && cached.length) {
-        setGroups(cached);
-        setExpandedGroups(prev => {
-          const next: Record<string, boolean> = { ...prev };
-          cached.forEach(g => { if (!(g.id in next)) next[g.id] = true; });
-          return next;
-        });
-      }
+      const groupsData =
+        await ApiService.getGroups();
 
-      const gs = await ApiService.getGroups();
-      setGroups(gs);
-      setExpandedGroups(prev => {
-        const next: Record<string, boolean> = { ...prev };
-        gs.forEach(g => { if (!(g.id in next)) next[g.id] = true; });
-        return next;
-      });
-    } catch (e) { console.error(e); }
-    finally { setGroupsLoaded(true); }
-  }, []);
+      setGroups(groupsData);
+    } catch (error) {
+      console.error(
+        '[GroupsChat] Failed to load groups:',
+        error
+      );
+    } finally {
+      setGroupsLoaded(true);
+    }
+  };
 
   const loadDMs = useCallback(async () => {
-    const selfUser = {
+    const selfUser: DMUser = {
       _id: currentUserId,
       name: profile?.name || currentUserName,
       email: profile?.email || currentUserEmail,
@@ -130,14 +122,118 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
     };
 
     try {
-      const all = await ApiService.searchUsers('');
-      const filtered = all.filter(u => u._id !== currentUserId);
-      setDmUsers([selfUser, ...filtered.slice(0, 29)].map(u => ({ ...u })));
+      // Build the initial DM directory from users already present
+      // in the groups we have already fetched.
+      const usersMap = new Map<string, DMUser>();
+
+      for (const group of groups) {
+        for (const member of group.members || []) {
+          const userObj =
+            typeof (member as any).userId === 'object'
+              ? (member as any).userId
+              : null;
+
+          const userId = (
+            userObj?._id ||
+            (member as any).userId
+          )?.toString?.();
+
+          if (!userId || userId === currentUserId) continue;
+
+          const name =
+            userObj?.name ||
+            (member as any).name ||
+            '';
+
+          const email =
+            userObj?.email ||
+            (member as any).email ||
+            '';
+
+          if (!name && !email) continue;
+
+          if (!usersMap.has(userId)) {
+            usersMap.set(userId, {
+              _id: userId,
+              name: name || 'User',
+              email,
+              // Group response may contain avatarUrl in some deployments.
+              // If it does not, avatar loading below will fill it.
+              avatarUrl: userObj?.avatarUrl || ''
+            });
+          }
+        }
+      }
+
+
+      // Also fetch only people who have actually exchanged
+      // at least one personal DM with the current user.
+      const directContacts = await ApiService.getDirectMessageContacts();
+
+      for (const user of directContacts) {
+        if (!user?._id || user._id === currentUserId) continue;
+
+        usersMap.set(user._id.toString(), {
+          _id: user._id.toString(),
+          name: user.name || 'User',
+          email: user.email || '',
+          avatarUrl: user.avatarUrl || ''
+        });
+      }
+
+      const nextUsers: DMUser[] = [
+        selfUser,
+        ...Array.from(usersMap.values())
+      ];
+
+      setDmUsers(nextUsers);
+
+      // Load avatars for the group users without putting large
+      // avatar data back into the /groups response.
+      const avatarIds = nextUsers
+        .filter(u => u._id !== currentUserId && !u.avatarUrl)
+        .map(u => u._id);
+
+      if (avatarIds.length) {
+        try {
+          const avatars = await ApiService.getUserAvatars(avatarIds);
+
+          const avatarMap = new Map(
+            avatars.map(u => [
+              u._id.toString(),
+              u.avatarUrl || ''
+            ])
+          );
+
+          setDmUsers(prev =>
+            prev.map(user => {
+              const avatarUrl = avatarMap.get(user._id);
+
+              return avatarUrl !== undefined
+                ? { ...user, avatarUrl }
+                : user;
+            })
+          );
+        } catch (avatarError) {
+          console.error(
+            '[GroupsChat] Failed to load DM avatars:',
+            avatarError
+          );
+        }
+      }
     } catch (e) {
+      console.error('[GroupsChat] Failed to load DM users:', e);
       setDmUsers([selfUser]);
-      console.error(e);
     }
-  }, [currentUserId, currentUserName, currentUserEmail, profile?.name, profile?.email, profile?.avatarUrl]);
+  }, [
+    groups,
+    currentUserId,
+    currentUserName,
+    currentUserEmail,
+    profile?.name,
+    profile?.email,
+    profile?.avatarUrl
+  ]);
 
   const loadUserProfile = useCallback(async () => {
     try {
@@ -186,16 +282,46 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
     if (initRef.current) return;
     initRef.current = true;
 
+    const cachedProfile = ApiService.getCachedMyProfile && ApiService.getCachedMyProfile();
+    if (cachedProfile) {
+      setProfile(cachedProfile);
+      setProfileDraft({
+        _id: cachedProfile._id,
+        name: cachedProfile.name || '',
+        email: cachedProfile.email || '',
+        phone: cachedProfile.phone || '',
+        timeZone: cachedProfile.timeZone || '',
+        workingTimeStart: cachedProfile.workingTimeStart || '',
+        workingTimeEnd: cachedProfile.workingTimeEnd || '',
+        statusText: cachedProfile.statusText || '',
+        about: cachedProfile.about || '',
+        avatarUrl: cachedProfile.avatarUrl || '',
+        createdAt: cachedProfile.createdAt,
+        updatedAt: cachedProfile.updatedAt
+      });
+    }
+
+    const cachedGroups = ApiService.getCachedGroups && ApiService.getCachedGroups();
+    if (cachedGroups && cachedGroups.length) {
+      setGroups(cachedGroups);
+      setGroupsLoaded(true);
+    }
+
     const init = async () => {
       await Promise.all([
         loadUserProfile(),
-        loadGroups(),
-        loadDMs()
+        loadGroups()
       ]);
     };
 
     void init();
-  }, [loadGroups, loadDMs, loadUserProfile]);
+  }, [loadGroups, loadUserProfile]);
+
+  useEffect(() => {
+    if (!groupsLoaded) return;
+
+    void loadDMs();
+  }, [groupsLoaded, loadDMs]);
 
   useEffect(() => {
     if (!target) {
@@ -727,7 +853,17 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
                       className="w-full text-left px-3 py-2 hover:bg-slate-700 text-sm border-b border-slate-700 last:border-b-0"
                     >
                       <div className="flex items-center gap-2">
-                        <UserCircle className="w-4 h-4 text-indigo-400" />
+                        {u.avatarUrl ? (
+                          <img
+                            src={u.avatarUrl}
+                            alt={u.name}
+                            className="w-8 h-8 rounded-full object-cover flex-shrink-0"
+                          />
+                        ) : (
+                          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-400 to-purple-500 text-white text-xs font-semibold flex items-center justify-center flex-shrink-0">
+                            {u.name.charAt(0).toUpperCase()}
+                          </div>
+                        )}
                         <div className="flex-1 min-w-0">
                           <div className="font-medium text-slate-100 truncate">{u.name}</div>
                           <div className="text-xs text-slate-400 truncate">{u.email}</div>
@@ -883,18 +1019,11 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
               )}
               {messages.map(m => {
                 const mine = (typeof m.senderId === 'object' ? m.senderId._id : m.senderId) === currentUserId;
-                const senderAvatar = typeof m.senderId === 'object'
-                  ? (m.senderId as any).avatarUrl
-                  : (mine ? (profile?.avatarUrl || currentUserAvatar || getStoredUser().avatarUrl) : undefined);
                 return (
-                  <div key={m.id} className={`flex gap-3 ${mine ? 'flex-row-reverse' : ''}`}>
-                    {senderAvatar ? (
-                      <img src={senderAvatar} alt={getSenderName(m.senderId)} className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
-                    ) : (
-                      <div className={`w-8 h-8 rounded-full bg-gradient-to-br ${mine ? 'from-indigo-500 to-purple-600' : 'from-emerald-400 to-teal-500'} text-white text-xs font-semibold flex items-center justify-center flex-shrink-0`}>
-                        {getSenderInitial(m.senderId)}
-                      </div>
-                    )}
+                  <div
+                    key={m.id}
+                    className={`flex ${mine ? 'justify-end' : 'justify-start'}`}
+                  >
                     <div className={`max-w-[85%] sm:max-w-[70%] ${mine ? 'items-end' : 'items-start'} flex flex-col min-w-0`}>
                       <div className={`flex items-center gap-2 text-xs text-slate-500 mb-1 ${mine ? 'flex-row-reverse' : ''}`}>
                         <span className="font-medium text-slate-600">{getSenderName(m.senderId)}</span>

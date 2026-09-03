@@ -47,6 +47,24 @@ export interface Project {
   };
 }
 
+export interface ProjectSummary {
+  id: string;
+  userId: string;
+  name: string;
+  clientName: string;
+  websiteUrl: string;
+  groupId?: string;
+  groupIds?: string[];
+  mode?: ProjectMode;
+  assignedUserIds?: string[];
+  status: ProjectStatus;
+  createdAt: string;
+
+  // Lightweight dashboard fields
+  pageCount: number;
+  coverImageUrl?: string | null;
+}
+
 export interface ProjectFormData extends Pick<Project, 'name' | 'clientName' | 'websiteUrl'> {
   initialPageUrl: string;
   groupId?: string;

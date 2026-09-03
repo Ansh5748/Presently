@@ -43,79 +43,203 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
   const [showIssueModal, setShowIssueModal] = useState(false);
   const [issueModalPin, setIssueModalPin] = useState<Pin | null>(null);
 
-  useEffect(() => {
+    useEffect(() => {
     const u = StorageService.getUser() as any;
-    setCurrentUserId((u?.userId || u?.id || '').toString());
-    // Prefill from cache for snappy UI, then refresh
-    const cached = ApiService.getCachedProjects && ApiService.getCachedProjects();
-    if (cached) {
-      const p = cached.find(c => c.id === projectId) || null;
-      if (p) {
-        setProject(p);
-        if (p.pages && p.pages.length > 0) setActivePageId(p.pages[0].id);
-      }
-    }
-    loadProject();
+
+    setCurrentUserId(
+      (u?.userId || u?.id || '').toString()
+    );
+
+    void loadProject();
   }, [projectId, isLiveView]);
 
   const loadProject = async () => {
+    let projectData: Project | null = null;
+
     try {
       const view = isLiveView ? 'live' : 'draft';
-      // Try cached project and pins first
-      const cachedProject = ApiService.getCachedProjects && ApiService.getCachedProjects()?.find(p => p.id === projectId);
-      if (cachedProject) {
-        setProject(cachedProject);
-        if (cachedProject.pages.length > 0) setActivePageId(cachedProject.pages[0].id);
+
+      // -----------------------------------------
+      // 1. INSTANT CACHE READ
+      // -----------------------------------------
+
+      if (!isLiveView) {
+        const cachedProject =
+          ApiService.getCachedProject(projectId);
+
+        const cachedPins =
+          ApiService.getCachedPins(projectId, view);
+
+        let hasCache = false;
+
+        if (cachedProject) {
+          projectData = cachedProject;
+          hasCache = true;
+
+          setProject(cachedProject);
+
+          if (cachedProject.pages?.length) {
+            setActivePageId(
+              cachedProject.pages[0].id
+            );
+          }
+        }
+
+        if (cachedPins) {
+          hasCache = true;
+          setPins(cachedPins);
+        }
+
+        if (hasCache) {
+          setLoading(false);
+        }
       }
-      const cachedPins = ApiService.getCachedProjects ? (ApiService.getCachedProjects()?.find(p => p.id === projectId)?.pages ? [] : null) : null; // placeholder
 
-      const projectData = await ApiService.getProject(projectId, view);
-      setProject(projectData);
+      // -----------------------------------------
+      // 2. PROJECT + PINS IN PARALLEL
+      // -----------------------------------------
 
-      if (projectData.pages.length > 0) {
-        setActivePageId(projectData.pages[0].id);
+      const [freshProject, freshPins] =
+        await Promise.all([
+          ApiService.getProject(projectId, view),
+          ApiService.getPins(projectId, view)
+        ]);
+
+      projectData = freshProject;
+
+      setProject(freshProject);
+
+      if (freshProject.pages?.length) {
+        setActivePageId(
+          freshProject.pages[0].id
+        );
       }
 
-      const pinsData = await ApiService.getPins(projectId, view);
-      setPins(pinsData);
+      setPins(freshPins);
 
-      if (projectData.mode === 'working') {
-        try {
-          const issuesData = await ApiService.getProjectIssues(projectId);
-          setProjectIssues(issuesData);
-        } catch { setProjectIssues([]); }
+      // -----------------------------------------
+      // 3. WORKING MODE DATA IN PARALLEL
+      // -----------------------------------------
 
-        try {
-          const assigneeData = await ApiService.getProjectAssignees(projectId);
+      if (freshProject.mode === 'working') {
+        const [issuesResult, assigneeResult] =
+          await Promise.allSettled([
+            ApiService.getProjectIssues(projectId),
+            ApiService.getProjectAssignees(projectId)
+          ]);
+
+        if (
+          issuesResult.status === 'fulfilled'
+        ) {
+          setProjectIssues(
+            issuesResult.value
+          );
+        }
+
+        if (
+          assigneeResult.status === 'fulfilled'
+        ) {
+          const assigneeData =
+            assigneeResult.value;
+
           const allOpts = [
             ...(assigneeData.projectAssignees || []),
-            ...((assigneeData.otherGroups || []).flatMap((g: any) => g.members || []))
+            ...(
+              assigneeData.otherGroups || []
+            ).flatMap(
+              (g: any) => g.members || []
+            )
           ];
-          const uniq = new Map<string, { id: string; name: string; avatarUrl?: string; designation?: string }>();
+
+          const uniq = new Map<
+            string,
+            {
+              id: string;
+              name: string;
+              avatarUrl?: string;
+              designation?: string;
+            }
+          >();
+
           allOpts.forEach((a: any) => {
-            const id = (a._id || a.id || a.userId)?.toString?.();
+            const id = (
+              a._id ||
+              a.id ||
+              a.userId
+            )?.toString?.();
+
             if (!id) return;
             if (uniq.has(id)) return;
-            uniq.set(id, { id, name: a.name || 'User', avatarUrl: a.avatarUrl, designation: a.designation });
+
+            uniq.set(id, {
+              id,
+              name: a.name || 'User',
+              avatarUrl: a.avatarUrl,
+              designation: a.designation
+            });
           });
-          setAssigneeOptions(Array.from(uniq.values()));
-          const perm = assigneeData.permissions || ({} as any);
-          setIsGroupMember(!!perm.isProjectGroupMember);
-          setIsTeamMember(!!perm.isTeamMember);
-          const u = StorageService.getUser() as any;
-          const isOwnerOrAdmin = projectData.userId?.toString?.() === currentUserId.toString() || SPECIAL_EMAILS.includes((u?.email || '').toLowerCase());
-          const canAssignOrQA = !!perm.canAssign || isOwnerOrAdmin;
-          setIsPMorOwner(canAssignOrQA);
-          setCanAssignFilterAssignees(canAssignOrQA);
-        } catch {}
+
+          setAssigneeOptions(
+            Array.from(uniq.values())
+          );
+
+          const perm =
+            assigneeData.permissions ||
+            ({} as any);
+
+          setIsGroupMember(
+            !!perm.isProjectGroupMember
+          );
+
+          setIsTeamMember(
+            !!perm.isTeamMember
+          );
+
+          const u =
+            StorageService.getUser() as any;
+
+          const isOwnerOrAdmin =
+            freshProject.userId
+              ?.toString?.() ===
+              currentUserId.toString() ||
+            SPECIAL_EMAILS.includes(
+              (u?.email || '').toLowerCase()
+            );
+
+          const canAssignOrQA =
+            !!perm.canAssign ||
+            isOwnerOrAdmin;
+
+          setIsPMorOwner(
+            canAssignOrQA
+          );
+
+          setCanAssignFilterAssignees(
+            canAssignOrQA
+          );
+        }
       }
+
     } catch (error: any) {
-      if (!isLiveView && onNavigate && (error.status === 403 || (error.response && error.response.status === 403))) {
+      if (
+        !isLiveView &&
+        onNavigate &&
+        (
+          error.status === 403 ||
+          (
+            error.response &&
+            error.response.status === 403
+          )
+        )
+      ) {
         StorageService.clearUser();
         onNavigate('/login');
         return;
       }
-      alert('Project not found');
+
+      if (!projectData) {
+        alert('Project not found');
+      }
     } finally {
       setLoading(false);
     }

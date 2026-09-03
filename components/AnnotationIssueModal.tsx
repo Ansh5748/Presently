@@ -242,9 +242,10 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
     setHasMoreMessages(true);
     shouldScrollToBottomRef.current = true;
     try {
-      // Try cached pin issue first for snappy UI
+      let cacheHit = false;
       const cached = ApiService.getCachedPinIssue && ApiService.getCachedPinIssue(pin.id);
       if (cached) {
+        cacheHit = true;
         const existingAssigneeId = cached.assigneeId
           ? (typeof cached.assigneeId === 'object'
             ? (cached.assigneeId as any)._id || (cached.assigneeId as any).id
@@ -258,7 +259,12 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
         if (cachedMsgs && cachedMsgs.length) {
           shouldScrollToBottomRef.current = true;
           setMessages(cachedMsgs.slice(-30));
+          setLoadingMessages(false);
         }
+      }
+
+      if (cacheHit) {
+        setLoading(false);
       }
 
       const existing = await ApiService.getPinIssue(pin.id);
@@ -296,6 +302,7 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
       if (cached && cached.length) {
         shouldScrollToBottomRef.current = true;
         setMessages(cached.slice(-30));
+        setLoadingMessages(false);
       }
       const msgs = await ApiService.getIssueMessagesPage(issueId, undefined, 30);
       const tail = msgs.length > 30 ? msgs.slice(-30) : msgs;
@@ -1242,11 +1249,7 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
                     <div key={m.id} className={`flex gap-3 ${mine ? 'flex-row-reverse' : ''}`}>
                       {senderAvatar ? (
                         <img src={senderAvatar} alt={getSenderName(m.senderId)} className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
-                      ) : (
-                        <div className={`w-8 h-8 rounded-full bg-gradient-to-br ${mine ? 'from-indigo-500 to-purple-600' : 'from-emerald-400 to-teal-500'} text-white text-xs font-semibold flex items-center justify-center flex-shrink-0`}>
-                          {getSenderInitial(m.senderId)}
-                        </div>
-                      )}
+                      ) : null}
                       <div className={`max-w-[78%] ${mine ? 'items-end' : 'items-start'} flex flex-col`}>
                         <div className={`flex items-center gap-2 text-xs text-slate-500 mb-1 ${mine ? 'flex-row-reverse' : ''}`}>
                           <span className="font-medium text-slate-600">{getSenderName(m.senderId)}</span>

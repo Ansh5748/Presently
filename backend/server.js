@@ -1,5 +1,6 @@
 require('dotenv').config();
 const express = require('express');
+const compression = require('compression');
 const mongoose = require('mongoose');
 // const puppeteer = require('puppeteer'); // Legacy Puppeteer service commented out
 const jwt = require('jsonwebtoken');
@@ -26,6 +27,7 @@ const registerCollabRoutes = require('./routes/collabRoutes');
 const emailService = require('./services/emailService');
 
 const app = express();
+app.use(compression());
 const cors = require('cors');
 
 const corsOptions = {
@@ -627,12 +629,23 @@ app.get('/subscription/status', authenticateToken, async (req, res) => {
       });
     }
 
-    // Find active subscription
-    const activeSubscription = await Subscription.findOne({
-      userId,
-      status: 'active',
-      expiresAt: { $gt: new Date() }
-    }).sort({ expiresAt: -1 });
+    // Find active / pending / expired in parallel
+    const [activeSubscription, pendingSubscription, expiredSubscription] = await Promise.all([
+      Subscription.findOne({
+        userId,
+        status: 'active',
+        expiresAt: { $gt: new Date() }
+      }).sort({ expiresAt: -1 }).lean(),
+      Subscription.findOne({
+        userId,
+        status: 'pending_verification'
+      }).sort({ createdAt: -1 }).lean(),
+      Subscription.findOne({
+        userId,
+        status: { $in: ['active', 'expired'] },
+        expiresAt: { $lte: new Date() }
+      }).sort({ expiresAt: -1 }).lean()
+    ]);
 
     if (activeSubscription) {
       return res.json({
@@ -641,12 +654,6 @@ app.get('/subscription/status', authenticateToken, async (req, res) => {
       });
     }
 
-    // Check for pending verification
-    const pendingSubscription = await Subscription.findOne({
-      userId,
-      status: 'pending_verification'
-    }).sort({ createdAt: -1 });
-
     if (pendingSubscription) {
       return res.json({
         hasActiveSubscription: false,
@@ -654,13 +661,6 @@ app.get('/subscription/status', authenticateToken, async (req, res) => {
         subscription: pendingSubscription
       });
     }
-
-    // Check for expired subscription
-    const expiredSubscription = await Subscription.findOne({
-      userId,
-      status: { $in: ['active', 'expired'] },
-      expiresAt: { $lte: new Date() }
-    }).sort({ expiresAt: -1 });
 
     if (expiredSubscription) {
       return res.json({
@@ -1042,45 +1042,78 @@ app.post('/admin/subscriptions/grant', authenticateToken, async (req, res) => {
 
 // ==================== PROJECT ROUTES ====================
 
-// Get all projects for user
-app.get('/projects', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const projects = await Project.find({ userId }).sort({ createdAt: -1 });
-    res.json(projects);
-  } catch (error) {
-    console.error('[Get Projects] Error:', error);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
 
-// Get single project
-app.get('/projects/:projectId', async (req, res) => {
-  try {
-    const { projectId } = req.params;
-    const { view } = req.query; // 'draft' or 'live'
 
-    const project = await Project.findOne({ id: projectId });
-    if (!project) {
-      return res.status(404).json({ error: 'Project not found' });
+// Get single project (published view is public; draft view requires auth)
+app.get('/projects/:projectId', (req, res) => {
+  const runAuth = () => new Promise((resolve, reject) => {
+    authenticateToken(req, res, (err) => {
+      if (err) return reject(err);
+      resolve(req.user);
+    });
+  });
+
+  (async () => {
+    try {
+      const { projectId } = req.params;
+      const { view } = req.query;
+
+      const project = await Project.findOne({ id: projectId }).lean();
+      if (!project) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+
+      if (view === 'live' && project.status === 'PUBLISHED' && project.publishedSnapshot) {
+        return res.json({
+          ...project,
+          pages: project.publishedSnapshot.pages,
+          isPublishedView: true
+        });
+      }
+
+      let user;
+      try {
+        user = await runAuth();
+      } catch (err) {
+        return;
+      }
+
+      const userId = user.id;
+      const userIdStr = userId.toString();
+      let hasAccess = project.userId.toString() === userIdStr;
+
+      if (!hasAccess && project.assignedUserIds) {
+        hasAccess = project.assignedUserIds.some(id => id.toString() === userIdStr);
+      }
+
+      if (!hasAccess) {
+        const groupIds = [];
+        if (project.groupIds && Array.isArray(project.groupIds)) {
+          for (const g of project.groupIds) if (g) groupIds.push(g);
+        }
+        if (project.groupId) groupIds.push(project.groupId);
+
+        if (groupIds.length) {
+          const userObjId = new mongoose.Types.ObjectId(userId);
+          const groups = await Group.find({ _id: { $in: groupIds } }).select('members createdBy').lean();
+          hasAccess = groups.some(g =>
+            g.members.some(m => m.userId.toString() === userIdStr) ||
+            (g.createdBy && g.createdBy.toString() === userObjId.toString())
+          );
+        }
+      }
+
+      if (!hasAccess) {
+        return res.status(403).json({ error: 'Access denied' });
+      }
+
+      res.json(project);
+
+    } catch (error) {
+      console.error('[Get Project] Error:', error);
+      res.status(500).json({ error: 'Server error' });
     }
-
-    // If requesting live/published view, return snapshot
-    if (view === 'live' && project.status === 'PUBLISHED' && project.publishedSnapshot) {
-      return res.json({
-        ...project.toObject(),
-        pages: project.publishedSnapshot.pages,
-        isPublishedView: true
-      });
-    }
-
-    // Otherwise return draft/current state
-    res.json(project);
-
-  } catch (error) {
-    console.error('[Get Project] Error:', error);
-    res.status(500).json({ error: 'Server error' });
-  }
+  })();
 });
 
 // Create project
@@ -1092,28 +1125,26 @@ app.post('/projects', authenticateToken, async (req, res) => {
 
     // Check subscription (skip for special emails)
     if (FREE_EMAILS[userEmail] !== 'skip') {
-      const activeSubscription = await Subscription.findOne({
-        userId,
-        status: 'active',
-        expiresAt: { $gt: new Date() }
-      });
-
-      if (!activeSubscription) {
-        // Check for pending verification
-        const pendingSubscription = await Subscription.findOne({
+      const [activeSubscription, pendingSubscription, expiredSubscription] = await Promise.all([
+        Subscription.findOne({
+          userId,
+          status: 'active',
+          expiresAt: { $gt: new Date() }
+        }).lean(),
+        Subscription.findOne({
           userId,
           status: 'pending_verification'
-        });
-        if (pendingSubscription) return res.status(403).json({ error: 'Payment verification pending', pendingVerification: true });
-
-        // Check for expired subscription
-        const expiredSubscription = await Subscription.findOne({
+        }).lean(),
+        Subscription.findOne({
           userId,
           status: { $in: ['active', 'expired'] },
           expiresAt: { $lte: new Date() }
-        });
-        if (expiredSubscription) return res.status(403).json({ error: 'Subscription expired', isExpired: true });
+        }).lean()
+      ]);
 
+      if (!activeSubscription) {
+        if (pendingSubscription) return res.status(403).json({ error: 'Payment verification pending', pendingVerification: true });
+        if (expiredSubscription) return res.status(403).json({ error: 'Subscription expired', isExpired: true });
         return res.status(403).json({
           error: 'Active subscription required',
           requiresSubscription: true
@@ -1163,26 +1194,26 @@ app.post('/projects/:projectId/pages', authenticateToken, async (req, res) => {
 
     // Check subscription for adding pages (skip for special emails)
     if (FREE_EMAILS[userEmail] !== 'skip') {
-      const activeSubscription = await Subscription.findOne({
-        userId,
-        status: 'active',
-        expiresAt: { $gt: new Date() }
-      });
-
-      if (!activeSubscription) {
-        const pendingSubscription = await Subscription.findOne({
+      const [activeSubscription, pendingSubscription, expiredSubscription] = await Promise.all([
+        Subscription.findOne({
+          userId,
+          status: 'active',
+          expiresAt: { $gt: new Date() }
+        }).lean(),
+        Subscription.findOne({
           userId,
           status: 'pending_verification'
-        });
-        if (pendingSubscription) return res.status(403).json({ error: 'Payment verification pending', pendingVerification: true });
-
-        const expiredSubscription = await Subscription.findOne({
+        }).lean(),
+        Subscription.findOne({
           userId,
           status: { $in: ['active', 'expired'] },
           expiresAt: { $lte: new Date() }
-        });
-        if (expiredSubscription) return res.status(403).json({ error: 'Subscription expired', isExpired: true });
+        }).lean()
+      ]);
 
+      if (!activeSubscription) {
+        if (pendingSubscription) return res.status(403).json({ error: 'Payment verification pending', pendingVerification: true });
+        if (expiredSubscription) return res.status(403).json({ error: 'Subscription expired', isExpired: true });
         return res.status(403).json({ error: 'Active subscription required', requiresSubscription: true });
       }
     }

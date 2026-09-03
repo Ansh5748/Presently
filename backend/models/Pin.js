@@ -44,4 +44,9 @@ const pinSchema = new mongoose.Schema({
   }
 });
 
+pinSchema.index({
+  projectId: 1,
+  number: 1
+});
+
 module.exports = mongoose.model('Pin', pinSchema);

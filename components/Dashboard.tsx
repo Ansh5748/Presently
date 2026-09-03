@@ -4,7 +4,7 @@ import { ApiService } from '../services/apiService';
 import { SubscriptionModal } from './SubscriptionModal';
 import { GroupManagementModal } from './GroupManagementModal';
 import { LiveCaptureModal } from './LiveCaptureModal';
-import { Project, ProjectStatus, ProjectMode, Group } from '../types';
+import { ProjectSummary, ProjectStatus, ProjectMode, Group } from '../types';
 import logoImg from '../src/assets/presently_logo.png'; 
 import { 
   Plus, ExternalLink, Trash2, Loader2, ArrowRight, LogOut, Crown, Laptop, 
@@ -25,7 +25,7 @@ interface DashboardProps {
 
 export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) => {
   const safeLower = (v?: string) => (v || '').toLowerCase();
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(true);
   const [groups, setGroups] = useState<Group[]>([]);
   const [isCreating, setIsCreating] = useState(false);
@@ -267,7 +267,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
 
       const newProject = await ApiService.createProject(payload);
 
-      setProjects([newProject, ...projects]);
+      setProjects(prev => [
+        {
+          id: newProject.id,
+          userId: newProject.userId,
+          name: newProject.name,
+          clientName: newProject.clientName,
+          websiteUrl: newProject.websiteUrl,
+          groupId: newProject.groupId,
+          groupIds: newProject.groupIds,
+          mode: newProject.mode,
+          assignedUserIds: newProject.assignedUserIds,
+          status: newProject.status,
+          createdAt: newProject.createdAt,
+          pageCount: newProject.pages?.length ?? 0,
+          coverImageUrl: newProject.pages?.[0]?.imageUrl ?? null
+        },
+        ...prev
+      ]);
       setNewProjectData({ name: '', websiteUrl: '', clientName: '', groupId: 'none', mode: 'present' });
       setQuickUrl('');
       setLiveCaptureModalConfig({ isOpen: false, url: '', device: 'desktop' });
@@ -689,8 +706,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
             {filteredProjects.map(project => {
-              const coverImage = project.pages?.[0]?.imageUrl;
-              const pageCount = project.pages?.length || 0;
+              const coverImage = project.coverImageUrl;
+              const pageCount = project.pageCount;
               const isWorking = project.mode === 'working';
               const isPublished = project.status === ProjectStatus.PUBLISHED;
 

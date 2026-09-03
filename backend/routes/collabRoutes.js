@@ -31,7 +31,10 @@ module.exports = function registerCollabRoutes({
   const findProjectGroupsPopulated = async (project) => {
     const ids = getProjectGroupObjectIds(project);
     if (ids.length === 0) return [];
-    const groups = await Group.find({ _id: { $in: ids } }).populate('members.userId', 'name email');
+    const groups = await Group.find({ _id: { $in: ids } })
+      .populate('members.userId', 'name email')
+      .populate('createdBy', 'name email')
+      .lean();
     const seen = new Set();
     return groups.filter(g => {
       const k = g._id.toString();
@@ -41,37 +44,102 @@ module.exports = function registerCollabRoutes({
     });
   };
 
-  // ==================== OVERRIDE: GET /projects (include group/assigned projects) ====================
-
-  app.get('/projects', authenticateToken, async (req, res) => {
-    try {
-      const userId = req.user.id;
+  const checkProjectAccess = async (project, userId) => {
+    const userIdStr = userId.toString();
+    if (project.userId.toString() === userIdStr) return true;
+    if (project.assignedUserIds && project.assignedUserIds.some(id => id.toString() === userIdStr)) return true;
+    const groupObjectIds = getProjectGroupObjectIds(project);
+    if (groupObjectIds.length) {
       const userObjId = new mongoose.Types.ObjectId(userId);
-
-      const userGroups = await Group.find({
-        $or: [
-          { 'members.userId': userObjId },
-          { createdBy: userObjId }
-        ]
-      });
-
-      const groupIds = userGroups.map(g => g._id);
-
-      const projects = await Project.find({
-        $or: [
-          { userId: userObjId },
-          { groupId: { $in: groupIds } },
-          { groupIds: { $in: groupIds } },
-          { assignedUserIds: userObjId }
-        ]
-      }).sort({ createdAt: -1 });
-
-      res.json(projects);
-    } catch (error) {
-      console.error('[Get Projects] Error:', error);
-      res.status(500).json({ error: 'Server error' });
+      const groups = await Group.find({ _id: { $in: groupObjectIds } }).select('members createdBy').lean();
+      return groups.some(g =>
+        g.members.some(m => m.userId.toString() === userIdStr) ||
+        (g.createdBy && g.createdBy.toString() === userObjId.toString())
+      );
     }
-  });
+    return false;
+  };
+
+  // ==================== GET /projects - LIGHTWEIGHT SUMMARY ====================
+
+app.get('/projects', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const userObjId = new mongoose.Types.ObjectId(userId);
+
+    // Only fetch group IDs.
+    const userGroups = await Group.find({
+      $or: [
+        { 'members.userId': userObjId },
+        { createdBy: userObjId }
+      ]
+    })
+      .select('_id')
+      .lean();
+
+    const groupIds = userGroups.map(
+      group => group._id
+    );
+
+    const projects = await Project.aggregate([
+      {
+        $match: {
+          $or: [
+            { userId: userObjId },
+            { groupId: { $in: groupIds } },
+            { groupIds: { $in: groupIds } },
+            { assignedUserIds: userObjId }
+          ]
+        }
+      },
+
+      {
+        $sort: {
+          createdAt: -1
+        }
+      },
+
+      {
+        $project: {
+          _id: 0,
+
+          id: 1,
+          userId: 1,
+          name: 1,
+          clientName: 1,
+          websiteUrl: 1,
+          groupId: 1,
+          groupIds: 1,
+          mode: 1,
+          assignedUserIds: 1,
+          status: 1,
+          createdAt: 1,
+
+          pageCount: {
+            $size: {
+              $ifNull: ['$pages', []]
+            }
+          },
+
+          coverImageUrl: {
+            $arrayElemAt: ['$pages.imageUrl', 0]
+          }
+        }
+      }
+    ]);
+
+    res.json(projects);
+  } catch (error) {
+    console.error(
+      '[Get Projects Summary] Error:',
+      error
+    );
+
+    res.status(500).json({
+      error: 'Server error'
+    });
+  }
+});
 
   // ==================== OVERRIDE: POST /projects (support groupId + mode) ====================
 
@@ -83,26 +151,26 @@ module.exports = function registerCollabRoutes({
 
       // Check subscription (skip for special emails)
       if (FREE_EMAILS[userEmail] !== 'skip') {
-        const activeSubscription = await Subscription.findOne({
-          userId,
-          status: 'active',
-          expiresAt: { $gt: new Date() }
-        });
-
-        if (!activeSubscription) {
-          const pendingSubscription = await Subscription.findOne({
+        const [activeSubscription, pendingSubscription, expiredSubscription] = await Promise.all([
+          Subscription.findOne({
+            userId,
+            status: 'active',
+            expiresAt: { $gt: new Date() }
+          }).lean(),
+          Subscription.findOne({
             userId,
             status: 'pending_verification'
-          });
-          if (pendingSubscription) return res.status(403).json({ error: 'Payment verification pending', pendingVerification: true });
-
-          const expiredSubscription = await Subscription.findOne({
+          }).lean(),
+          Subscription.findOne({
             userId,
             status: { $in: ['active', 'expired'] },
             expiresAt: { $lte: new Date() }
-          });
-          if (expiredSubscription) return res.status(403).json({ error: 'Subscription expired', isExpired: true });
+          }).lean()
+        ]);
 
+        if (!activeSubscription) {
+          if (pendingSubscription) return res.status(403).json({ error: 'Payment verification pending', pendingVerification: true });
+          if (expiredSubscription) return res.status(403).json({ error: 'Subscription expired', isExpired: true });
           return res.status(403).json({
             error: 'Active subscription required',
             requiresSubscription: true
@@ -193,7 +261,7 @@ module.exports = function registerCollabRoutes({
   });
   app.get('/users/me', authenticateToken, async (req, res) => {
     try {
-      const user = await User.findById(req.user.id).select('_id name email phone timeZone workingTimeStart workingTimeEnd statusText about avatarUrl createdAt updatedAt isLocalComputeEnabled');
+      const user = await User.findById(req.user.id).select('_id name email phone timeZone workingTimeStart workingTimeEnd statusText about avatarUrl createdAt updatedAt isLocalComputeEnabled').lean();
       if (!user) return res.status(404).json({ error: 'User not found' });
       res.json(user);
     } catch (error) {
@@ -212,7 +280,7 @@ module.exports = function registerCollabRoutes({
         if (v === null || v === undefined) { updates[k] = ''; continue; }
         if (typeof v !== 'string') continue;
         if (k === 'avatarUrl') {
-          if (v.length > 8000000) continue;
+          if (v.length > 2000000) continue;
         }
         updates[k] = v;
       }
@@ -227,6 +295,50 @@ module.exports = function registerCollabRoutes({
   });
 
   // ==================== USER SEARCH ROUTE ====================
+
+    app.get('/users/avatars', authenticateToken, async (req, res) => {
+    try {
+      const rawIds = (req.query.ids || '').toString();
+
+      if (!rawIds.trim()) {
+        return res.json([]);
+      }
+
+      const ids = [
+        ...new Set(
+          rawIds
+            .split(',')
+            .map(id => id.trim())
+            .filter(id => mongoose.Types.ObjectId.isValid(id))
+        )
+      ];
+
+      if (!ids.length) {
+        return res.json([]);
+      }
+
+      const users = await User.find({
+        _id: {
+          $in: ids
+        }
+      })
+        .select('_id avatarUrl')
+        .lean();
+
+      res.json(
+        users.map(user => ({
+          _id: user._id,
+          avatarUrl: user.avatarUrl || ''
+        }))
+      );
+    } catch (error) {
+      console.error('[User Avatars] Error:', error);
+      res.status(500).json({
+        error: 'Server error'
+      });
+    }
+  });
+
 
   app.get('/users/search', authenticateToken, async (req, res) => {
     try {
@@ -255,7 +367,7 @@ module.exports = function registerCollabRoutes({
         ];
       }
 
-      const users = await User.find(searchQuery).select('_id name email avatarUrl').limit(20);
+      const users = await User.find(searchQuery).select('_id name email avatarUrl').limit(20).lean();
 
       res.json(users);
     } catch (error) {
@@ -266,7 +378,7 @@ module.exports = function registerCollabRoutes({
 
   app.get('/users/all', authenticateToken, async (req, res) => {
     try {
-      const users = await User.find({}).select('_id name email avatarUrl');
+      const users = await User.find({}).select('_id name email').lean();
       res.json(users);
     } catch (error) {
       console.error('[Users All] Error:', error);
@@ -284,11 +396,13 @@ module.exports = function registerCollabRoutes({
           { 'members.userId': new mongoose.Types.ObjectId(userId) },
           { createdBy: new mongoose.Types.ObjectId(userId) }
         ]
-      }).populate('members.userId', 'name email avatarUrl')
-        .populate('createdBy', 'name email avatarUrl')
-        .sort({ createdAt: -1 });
+      })
+        .populate('members.userId', 'name email')
+        .populate('createdBy', 'name email')
+        .sort({ createdAt: -1 })
+        .lean();
       const normalized = groups.map(g => {
-        const obj = g.toObject();
+        const obj = g;
         const createdById = (obj.createdBy?._id || obj.createdBy)?.toString?.();
         if (createdById) {
           obj.members = (obj.members || []).map(m => {
@@ -311,8 +425,9 @@ module.exports = function registerCollabRoutes({
       const { groupId } = req.params;
       const userId = req.user.id;
       const group = await Group.findOne({ id: groupId })
-        .populate('members.userId', 'name email avatarUrl')
-        .populate('createdBy', 'name email avatarUrl');
+        .populate('members.userId', 'name email')
+        .populate('createdBy', 'name email')
+        .lean()
       if (!group) return res.status(404).json({ error: 'Group not found' });
       const isMember = group.members.some(m => m.userId._id.toString() === userId) ||
         group.createdBy._id.toString() === userId;
@@ -360,7 +475,7 @@ module.exports = function registerCollabRoutes({
       }
 
       await group.save();
-      const populated = await Group.findOne({ id: groupId }).populate('members.userId', 'name email avatarUrl').populate('createdBy', 'name email avatarUrl');
+      const populated = await Group.findOne({ id: groupId }).populate('members.userId', 'name email').populate('createdBy', 'name email').lean();
       console.log('[Group] Created:', groupId);
       res.status(201).json(populated);
     } catch (error) {
@@ -631,82 +746,115 @@ module.exports = function registerCollabRoutes({
     try {
       const { projectId } = req.params;
       const userId = req.user.id;
-      const project = await Project.findOne({ id: projectId });
+      const project = await Project.findOne({ id: projectId }).lean();
       if (!project) return res.status(404).json({ error: 'Project not found' });
       const userObjId = new mongoose.Types.ObjectId(userId);
+      const userIdStr = userId.toString();
+
       let isProjectGroupMember = false;
       let isTeamMember = false;
-      let canAssign = project.userId.toString() === userId;
-      let projectAssignees = [];
+      let canAssign = project.userId.toString() === userIdStr;
+      let canCrossGroupSearch = canAssign;
+      const projectAssignees = [];
+      const seen = new Set();
+
       const projectGroups = await findProjectGroupsPopulated(project);
+
       for (const g of projectGroups) {
         if (g.type === 'team') isTeamMember = true;
-        const member = g.members.find(m => m.userId?._id?.toString?.() === userId || m.userId.toString() === userId);
-        const isMember = !!member || g.createdBy?._id?.toString?.() === userId || g.createdBy?.toString?.() === userId;
+
+        const gCreatedById = (g.createdBy?._id || g.createdBy)?.toString?.();
+        const member = g.members.find(m => {
+          const mid = (m.userId?._id || m.userId)?.toString?.();
+          return mid === userIdStr;
+        });
+        const isMember = !!member || (gCreatedById && gCreatedById === userIdStr);
+
         if (isMember) {
           isProjectGroupMember = true;
           if (!canAssign && member) {
             const desig = (member.designation || '').toLowerCase();
             if (desig === 'pm' || desig === 'product manager' || member.role === 'owner' || member.role === 'admin') {
               canAssign = true;
+              canCrossGroupSearch = true;
+            }
+          }
+          if (!canCrossGroupSearch && member) {
+            const desig = (member.designation || '').toLowerCase();
+            if (desig === 'pm' || desig === 'product manager' || member.role === 'owner' || member.role === 'admin') {
+              canCrossGroupSearch = true;
             }
           }
         }
-        projectAssignees = projectAssignees.concat(g.members.map(m => ({
-          _id: m.userId._id, name: m.userId.name, email: m.userId.email,
-          designation: m.designation, role: m.role,
-          groupType: g.type, groupName: g.name
-        })));
-      }
-      const ownerUser = await User.findById(project.userId).select('_id name email');
-      if (ownerUser && !projectAssignees.some(a => a._id.toString() === ownerUser._id.toString())) {
-        projectAssignees.push({ _id: ownerUser._id, name: ownerUser.name, email: ownerUser.email, designation: 'Owner', role: 'owner' });
-      }
 
-      let canCrossGroupSearch = canAssign;
-      if (!canCrossGroupSearch) {
-        for (const g of projectGroups) {
-          const member = g.members.find(m => m.userId?._id?.toString?.() === userId || m.userId.toString() === userId);
-          if (!member) continue;
-          const desig = (member.designation || '').toLowerCase();
-          if (desig === 'pm' || desig === 'product manager' || member.role === 'owner' || member.role === 'admin') {
-            canCrossGroupSearch = true;
-            break;
-          }
+        for (const m of g.members || []) {
+          const uid = (m.userId._id || m.userId)?.toString?.();
+          if (!uid || seen.has(uid)) continue;
+          seen.add(uid);
+          projectAssignees.push({
+            _id: m.userId._id || m.userId,
+            name: m.userId.name,
+            email: m.userId.email,
+            designation: m.designation,
+            role: m.role,
+            groupType: g.type,
+            groupName: g.name
+          });
         }
       }
 
-      const seen = new Set();
-      projectAssignees = projectAssignees.filter(a => {
-        const key = a._id.toString();
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-
-      let otherGroups = [];
-      if (!isTeamMember) {
-        const teamGroups = await Group.find({
-          type: 'team', $or: [{ 'members.userId': userObjId }, { createdBy: userObjId }]
-        }).select('_id');
-        isTeamMember = teamGroups.length > 0;
+      const ownerUser = await User.findById(project.userId).select('_id name email').lean();
+      if (ownerUser && !seen.has(ownerUser._id.toString())) {
+        seen.add(ownerUser._id.toString());
+        projectAssignees.push({
+          _id: ownerUser._id,
+          name: ownerUser.name,
+          email: ownerUser.email,
+          designation: 'Owner',
+          role: 'owner'
+        });
       }
 
-      if (canCrossGroupSearch) {
-        const projectGroupIds = new Set(projectGroups.map(g => g.id));
-        const allUserGroups = await Group.find({
-          $or: [{ 'members.userId': userObjId }, { createdBy: userObjId }]
-        }).populate('members.userId', 'name email');
+      const needTeamMemberCheck = !isTeamMember;
+      const needCrossGroupFetch = canCrossGroupSearch;
 
-        otherGroups = allUserGroups
-          .filter(g => !projectGroupIds.has(g.id) && !(g.projectIds || []).includes(project.id))
+      const projectGroupIds = new Set(projectGroups.map(g => g.id));
+      const projectIdStr = project.id;
+
+      const [teamGroupResult, allUserGroupsResult] = await Promise.all([
+        needTeamMemberCheck
+          ? Group.find({
+              type: 'team',
+              $or: [{ 'members.userId': userObjId }, { createdBy: userObjId }]
+            }).select('_id').lean()
+          : null,
+        needCrossGroupFetch
+          ? Group.find({
+              $or: [{ 'members.userId': userObjId }, { createdBy: userObjId }]
+            }).populate('members.userId', 'name email').lean()
+          : null
+      ]);
+
+      if (needTeamMemberCheck) {
+        isTeamMember = teamGroupResult.length > 0;
+      }
+
+      let otherGroups = [];
+      if (needCrossGroupFetch) {
+        otherGroups = allUserGroupsResult
+          .filter(g => !projectGroupIds.has(g.id) && !(g.projectIds || []).includes(projectIdStr))
           .map(g => ({
             id: g.id,
             name: g.name,
             type: g.type,
             members: (g.members || []).map(m => ({
-              _id: m.userId._id, name: m.userId.name, email: m.userId.email,
-              designation: m.designation, role: m.role, groupType: g.type, groupName: g.name
+              _id: m.userId._id || m.userId,
+              name: m.userId.name,
+              email: m.userId.email,
+              designation: m.designation,
+              role: m.role,
+              groupType: g.type,
+              groupName: g.name
             }))
           }));
       }
@@ -736,17 +884,18 @@ module.exports = function registerCollabRoutes({
       const limit = Math.min(parseInt(req.query.limit || '30', 10) || 30, 500);
       const before = req.query.before;
       const userId = req.user.id;
-      const group = await Group.findOne({ id: groupId });
+      const group = await Group.findOne({ id: groupId }).select('_id members createdBy type').lean();
       if (!group) return res.status(404).json({ error: 'Group not found' });
-      const isMember = group.members.some(m => m.userId.toString() === userId) ||
-        group.createdBy.toString() === userId;
+      const userIdStr = userId.toString();
+      const isMember = group.members.some(m => m.userId.toString() === userIdStr) ||
+        group.createdBy.toString() === userIdStr;
       if (!isMember) return res.status(403).json({ error: 'Access denied' });
       const userObjId = new mongoose.Types.ObjectId(userId);
       let isTeamMember = group.type === 'team';
       if (!isTeamMember) {
         const teamGroups = await Group.find({
           type: 'team', $or: [{ 'members.userId': userObjId }, { createdBy: userObjId }]
-        });
+        }).select('_id').lean();
         isTeamMember = teamGroups.length > 0;
       }
       const query = { groupId: group._id };
@@ -754,11 +903,9 @@ module.exports = function registerCollabRoutes({
       else query.subgroupId = { $exists: false };
       if (!isTeamMember) query.visibility = 'all';
 
-      // Support cursor-based pagination by `before` message id or ISO date
       let beforeDate = null;
       if (before) {
-        // try to find a message by id first
-        const beforeMsg = await Message.findOne({ id: before.toString() }).select('createdAt');
+        const beforeMsg = await Message.findOne({ id: before.toString() }).select('createdAt').lean();
         if (beforeMsg && beforeMsg.createdAt) beforeDate = beforeMsg.createdAt;
         else {
           const parsed = Date.parse(before.toString());
@@ -768,11 +915,11 @@ module.exports = function registerCollabRoutes({
 
       if (beforeDate) query.createdAt = { $lt: beforeDate };
 
-      // fetch newest-first then reverse to return chronological ascending
       const msgs = await Message.find(query)
-        .populate('senderId', 'name email avatarUrl')
+        .populate('senderId', 'name email')
         .sort({ createdAt: -1 })
-        .limit(limit);
+        .limit(limit)
+        .lean()
       const messages = msgs.reverse();
       res.json(messages);
     } catch (error) {
@@ -787,17 +934,22 @@ module.exports = function registerCollabRoutes({
       const userId = req.user.id;
       const { subgroupId, content, visibility = 'all' } = req.body;
       if (!content) return res.status(400).json({ error: 'Content required' });
-      const group = await Group.findOne({ id: groupId });
+      const group = await Group.findOne({ id: groupId }).select('_id members createdBy').lean();
       if (!group) return res.status(404).json({ error: 'Group not found' });
-      const isMember = group.members.some(m => m.userId.toString() === userId) ||
-        group.createdBy.toString() === userId;
+      const userIdStr = userId.toString();
+      const isMember = group.members.some(m => m.userId.toString() === userIdStr) ||
+        group.createdBy.toString() === userIdStr;
       if (!isMember) return res.status(403).json({ error: 'Access denied' });
       const msg = new Message({
-        id: generateId(), groupId: group._id, subgroupId: subgroupId || undefined,
-        senderId: new mongoose.Types.ObjectId(userId), content, visibility: visibility || 'all'
+        id: generateId(),
+        groupId: group._id,
+        subgroupId: subgroupId || undefined,
+        senderId: new mongoose.Types.ObjectId(userId),
+        content,
+        visibility: visibility || 'all'
       });
       await msg.save();
-      const populated = await msg.populate('senderId', 'name email avatarUrl');
+      const populated = await msg.populate('senderId', 'name email');
       res.status(201).json(populated);
     } catch (error) {
       console.error('[Send Group Message] Error:', error);
@@ -805,6 +957,75 @@ module.exports = function registerCollabRoutes({
     }
   });
 
+      app.get('/messages/direct/contacts', authenticateToken, async (req, res) => {
+    try {
+      const userId = new mongoose.Types.ObjectId(req.user.id);
+
+      const contacts = await Message.aggregate([
+        {
+          $match: {
+            groupId: { $exists: false },
+            directRecipientId: { $exists: true },
+            $or: [
+              { senderId: userId },
+              { directRecipientId: userId }
+            ]
+          }
+        },
+        {
+          $project: {
+            counterpartId: {
+              $cond: [
+                { $eq: ['$senderId', userId] },
+                '$directRecipientId',
+                '$senderId'
+              ]
+            },
+            lastMessageAt: '$createdAt'
+          }
+        },
+        {
+          $group: {
+            _id: '$counterpartId',
+            lastMessageAt: { $max: '$lastMessageAt' }
+          }
+        },
+        {
+          $sort: {
+            lastMessageAt: -1
+          }
+        },
+        {
+          $lookup: {
+            from: 'users',
+            localField: '_id',
+            foreignField: '_id',
+            as: 'user'
+          }
+        },
+        {
+          $unwind: '$user'
+        },
+        {
+          $project: {
+            _id: 1,
+            name: '$user.name',
+            email: '$user.email',
+            avatarUrl: '$user.avatarUrl',
+            lastMessageAt: 1
+          }
+        }
+      ]);
+
+      res.json(contacts);
+    } catch (error) {
+      console.error('[Direct Message Contacts] Error:', error);
+      res.status(500).json({
+        error: 'Server error'
+      });
+    }
+  });
+  
   app.get('/messages/direct/:recipientId', authenticateToken, async (req, res) => {
     try {
       const { recipientId } = req.params;
@@ -821,7 +1042,7 @@ module.exports = function registerCollabRoutes({
 
       let beforeDate = null;
       if (before) {
-        const beforeMsg = await Message.findOne({ id: before.toString() }).select('createdAt');
+        const beforeMsg = await Message.findOne({ id: before.toString() }).select('createdAt').lean();
         if (beforeMsg && beforeMsg.createdAt) beforeDate = beforeMsg.createdAt;
         else {
           const parsed = Date.parse(before.toString());
@@ -832,8 +1053,8 @@ module.exports = function registerCollabRoutes({
       if (beforeDate) query.createdAt = { $lt: beforeDate };
 
       const msgs = await Message.find(query)
-        .populate('senderId', 'name email avatarUrl').populate('directRecipientId', 'name email avatarUrl')
-        .sort({ createdAt: -1 }).limit(limit);
+        .populate('senderId', 'name email').populate('directRecipientId', 'name email')
+        .sort({ createdAt: -1 }).limit(limit).lean()
       const messages = msgs.reverse();
       res.json(messages);
     } catch (error) {
@@ -842,20 +1063,24 @@ module.exports = function registerCollabRoutes({
     }
   });
 
+
   app.post('/messages/direct/:recipientId', authenticateToken, async (req, res) => {
     try {
       const { recipientId } = req.params;
       const userId = req.user.id;
       const { content } = req.body;
       if (!content) return res.status(400).json({ error: 'Content required' });
-      const recipient = await User.findById(recipientId);
+      const recipient = await User.findById(recipientId).select('_id').lean();
       if (!recipient) return res.status(404).json({ error: 'Recipient not found' });
       const msg = new Message({
-        id: generateId(), directRecipientId: new mongoose.Types.ObjectId(recipientId),
-        senderId: new mongoose.Types.ObjectId(userId), content, visibility: 'all'
+        id: generateId(),
+        directRecipientId: new mongoose.Types.ObjectId(recipientId),
+        senderId: new mongoose.Types.ObjectId(userId),
+        content,
+        visibility: 'all'
       });
       await msg.save();
-      const populated = await msg.populate('senderId', 'name email avatarUrl');
+      const populated = await msg.populate('senderId', 'name email');
       res.status(201).json(populated);
     } catch (error) {
       console.error('[Send Direct Message] Error:', error);
@@ -869,25 +1094,15 @@ module.exports = function registerCollabRoutes({
     try {
       const { projectId } = req.params;
       const userId = req.user.id;
-      const project = await Project.findOne({ id: projectId });
+      const project = await Project.findOne({ id: projectId }).lean();
       if (!project) return res.status(404).json({ error: 'Project not found' });
-      let hasAccess = project.userId.toString() === userId;
-      if (!hasAccess && project.assignedUserIds) {
-        hasAccess = project.assignedUserIds.some(id => id.toString() === userId);
-      }
-      if (!hasAccess) {
-        const groupObjectIds = getProjectGroupObjectIds(project);
-        if (groupObjectIds.length) {
-          const groups = await Group.find({ _id: { $in: groupObjectIds } });
-          hasAccess = groups.some(g => g.members.some(m => m.userId.toString() === userId) || g.createdBy.toString() === userId);
-        }
-      }
+      const hasAccess = await checkProjectAccess(project, userId);
       if (!hasAccess) return res.status(403).json({ error: 'Access denied' });
       const issues = await AnnotationIssue.find({ projectId })
-        .populate('assigneeId', 'name email avatarUrl').populate('createdBy', 'name email avatarUrl')
-        .populate('assignmentHistory.fromUserId', 'name email avatarUrl')
-        .populate('assignmentHistory.toUserId', 'name email avatarUrl')
-        .sort({ createdAt: -1 });
+        .populate('assigneeId', 'name email')
+        .populate('createdBy', 'name email')
+        .sort({ createdAt: -1 })
+        .lean();
       res.json(issues);
     } catch (error) {
       console.error('[Get Project Issues] Error:', error);
@@ -900,23 +1115,15 @@ module.exports = function registerCollabRoutes({
       const { pinId } = req.params;
       const userId = req.user.id;
       const issue = await AnnotationIssue.findOne({ pinId })
-        .populate('assigneeId', 'name email avatarUrl').populate('createdBy', 'name email avatarUrl')
-        .populate('assignmentHistory.fromUserId', 'name email avatarUrl')
-        .populate('assignmentHistory.toUserId', 'name email avatarUrl');
+        .populate('assigneeId', 'name email')
+        .populate('createdBy', 'name email')
+        .populate('assignmentHistory.fromUserId', 'name email')
+        .populate('assignmentHistory.toUserId', 'name email')
+        .lean();
       if (!issue) return res.json(null);
-      const project = await Project.findOne({ id: issue.projectId });
+      const project = await Project.findOne({ id: issue.projectId }).lean();
       if (!project) return res.json(null);
-      let hasAccess = project.userId.toString() === userId;
-      if (!hasAccess && project.assignedUserIds) {
-        hasAccess = project.assignedUserIds.some(id => id.toString() === userId);
-      }
-      if (!hasAccess) {
-        const groupObjectIds = getProjectGroupObjectIds(project);
-        if (groupObjectIds.length) {
-          const groups = await Group.find({ _id: { $in: groupObjectIds } });
-          hasAccess = groups.some(g => g.members.some(m => m.userId.toString() === userId) || g.createdBy.toString() === userId);
-        }
-      }
+      const hasAccess = await checkProjectAccess(project, userId);
       if (!hasAccess) return res.status(403).json({ error: 'Access denied' });
       res.json(issue);
     } catch (error) {
@@ -991,10 +1198,10 @@ module.exports = function registerCollabRoutes({
         if (labels) issue.labels = labels;
         await issue.save();
         const populated = await issue.populate([
-          { path: 'assigneeId', select: 'name email avatarUrl' },
-          { path: 'createdBy', select: 'name email avatarUrl' },
-          { path: 'assignmentHistory.fromUserId', select: 'name email avatarUrl' },
-          { path: 'assignmentHistory.toUserId', select: 'name email avatarUrl' }
+          { path: 'assigneeId', select: 'name email' },
+          { path: 'createdBy', select: 'name email' },
+          { path: 'assignmentHistory.fromUserId', select: 'name email' },
+          { path: 'assignmentHistory.toUserId', select: 'name email' }
         ]);
         return res.json(populated);
       } else {
@@ -1018,10 +1225,10 @@ module.exports = function registerCollabRoutes({
         await Pin.findOneAndUpdate({ id: pinId }, { type: 'issue' });
 
         const populated = await issue.populate([
-          { path: 'assigneeId', select: 'name email avatarUrl' },
-          { path: 'createdBy', select: 'name email avatarUrl' },
-          { path: 'assignmentHistory.fromUserId', select: 'name email avatarUrl' },
-          { path: 'assignmentHistory.toUserId', select: 'name email avatarUrl' }
+          { path: 'assigneeId', select: 'name email' },
+          { path: 'createdBy', select: 'name email' },
+          { path: 'assignmentHistory.fromUserId', select: 'name email' },
+          { path: 'assignmentHistory.toUserId', select: 'name email' }
         ]);
         res.json(populated);
       }
@@ -1090,10 +1297,10 @@ module.exports = function registerCollabRoutes({
       issue.status = status;
       await issue.save();
       const populated = await issue.populate([
-        { path: 'assigneeId', select: 'name email avatarUrl' },
-        { path: 'createdBy', select: 'name email avatarUrl' },
-        { path: 'assignmentHistory.fromUserId', select: 'name email avatarUrl' },
-        { path: 'assignmentHistory.toUserId', select: 'name email avatarUrl' }
+        { path: 'assigneeId', select: 'name email' },
+        { path: 'createdBy', select: 'name email' },
+        { path: 'assignmentHistory.fromUserId', select: 'name email' },
+        { path: 'assignmentHistory.toUserId', select: 'name email' }
       ]);
       res.json(populated);
     } catch (error) {
@@ -1108,52 +1315,52 @@ module.exports = function registerCollabRoutes({
       const limit = Math.min(parseInt(req.query.limit || '30', 10) || 30, 500);
       const before = req.query.before;
       const userId = req.user.id;
-      const issue = await AnnotationIssue.findOne({ id: issueId });
+
+      const issue = await AnnotationIssue.findOne({ id: issueId }).select('_id projectId').lean();
       if (!issue) return res.status(404).json({ error: 'Issue not found' });
-      const project = await Project.findOne({ id: issue.projectId });
+
+      const project = await Project.findOne({ id: issue.projectId }).lean();
       if (!project) return res.status(404).json({ error: 'Project not found' });
-      let hasAccess = project.userId.toString() === userId;
-      if (!hasAccess && project.assignedUserIds) {
-        hasAccess = project.assignedUserIds.some(id => id.toString() === userId);
-      }
-      if (!hasAccess) {
-        const groupObjectIds = getProjectGroupObjectIds(project);
-        if (groupObjectIds.length) {
-          const groups = await Group.find({ _id: { $in: groupObjectIds } });
-          hasAccess = groups.some(g => g.members.some(m => m.userId.toString() === userId) || g.createdBy.toString() === userId);
-        }
-      }
+
+      const hasAccess = await checkProjectAccess(project, userId);
       if (!hasAccess) return res.status(403).json({ error: 'Access denied' });
+
       const userObjId = new mongoose.Types.ObjectId(userId);
       let isTeamMember = false;
+
       const projectGroupObjectIds = getProjectGroupObjectIds(project);
       if (projectGroupObjectIds.length) {
-        const projectGroups = await Group.find({ _id: { $in: projectGroupObjectIds } }).select('type');
-        if (projectGroups.some(g => g.type === 'team')) isTeamMember = true;
+        const projectGroups = await Group.find({ _id: { $in: projectGroupObjectIds } }).select('type').lean();
+        isTeamMember = projectGroups.some(g => g.type === 'team');
       }
+
       if (!isTeamMember) {
         const teamGroups = await Group.find({
-          type: 'team', $or: [{ 'members.userId': userObjId }, { createdBy: userObjId }]
-        });
+          type: 'team',
+          $or: [{ 'members.userId': userObjId }, { createdBy: userObjId }]
+        }).select('_id').lean();
         isTeamMember = teamGroups.length > 0;
       }
+
       const query = { annotationIssueId: issue._id };
       if (!isTeamMember) query.visibility = 'all';
 
-      let beforeDate = null;
       if (before) {
-        const beforeMsg = await AnnotationMessage.findOne({ id: before.toString() }).select('createdAt');
-        if (beforeMsg && beforeMsg.createdAt) beforeDate = beforeMsg.createdAt;
-        else {
-          const parsed = Date.parse(before.toString());
-          if (!isNaN(parsed)) beforeDate = new Date(parsed);
+        const beforeStr = before.toString();
+        const beforeMsg = await AnnotationMessage.findOne({ id: beforeStr }).select('createdAt').lean();
+        if (beforeMsg && beforeMsg.createdAt) {
+          query.createdAt = { $lt: beforeMsg.createdAt };
+        } else {
+          const parsed = Date.parse(beforeStr);
+          if (!isNaN(parsed)) query.createdAt = { $lt: new Date(parsed) };
         }
       }
 
-      if (beforeDate) query.createdAt = { $lt: beforeDate };
-
       const msgs = await AnnotationMessage.find(query)
-        .populate('senderId', 'name email avatarUrl').sort({ createdAt: -1 }).limit(limit);
+        .populate('senderId', 'name email')
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .lean();
       const messages = msgs.reverse();
       res.json(messages);
     } catch (error) {
@@ -1168,28 +1375,21 @@ module.exports = function registerCollabRoutes({
       const userId = req.user.id;
       const { content, visibility = 'all' } = req.body;
       if (!content) return res.status(400).json({ error: 'Content required' });
-      const issue = await AnnotationIssue.findOne({ id: issueId });
+      const issue = await AnnotationIssue.findOne({ id: issueId }).select('_id projectId').lean();
       if (!issue) return res.status(404).json({ error: 'Issue not found' });
-      const project = await Project.findOne({ id: issue.projectId });
+      const project = await Project.findOne({ id: issue.projectId }).lean();
       if (!project) return res.status(404).json({ error: 'Project not found' });
-      let hasAccess = project.userId.toString() === userId;
-      if (!hasAccess && project.assignedUserIds) {
-        hasAccess = project.assignedUserIds.some(id => id.toString() === userId);
-      }
-      if (!hasAccess) {
-        const groupObjectIds = getProjectGroupObjectIds(project);
-        if (groupObjectIds.length) {
-          const groups = await Group.find({ _id: { $in: groupObjectIds } });
-          hasAccess = groups.some(g => g.members.some(m => m.userId.toString() === userId) || g.createdBy.toString() === userId);
-        }
-      }
+      const hasAccess = await checkProjectAccess(project, userId);
       if (!hasAccess) return res.status(403).json({ error: 'Access denied' });
       const msg = new AnnotationMessage({
-        id: generateId(), annotationIssueId: issue._id,
-        senderId: new mongoose.Types.ObjectId(userId), content, visibility: visibility || 'all'
+        id: generateId(),
+        annotationIssueId: issue._id,
+        senderId: new mongoose.Types.ObjectId(userId),
+        content,
+        visibility: visibility || 'all'
       });
       await msg.save();
-      const populated = await msg.populate('senderId', 'name email avatarUrl');
+      const populated = await msg.populate('senderId', 'name email');
       res.status(201).json(populated);
     } catch (error) {
       console.error('[Send Issue Message] Error:', error);

@@ -10,10 +10,14 @@
   MemberRole,
   MessageVisibility,
   Project,
+  ProjectSummary,
+  Pin,
   Subgroup,
   UserProfile,
   UserSearchResult
 } from '../types';
+
+import { CacheService } from './cacheService';
 
 const API_BASE = (import.meta.env.VITE_API_URL as string) || '';
 export const AUTH_EVENT = 'presently:auth:error';
@@ -72,45 +76,6 @@ export const authFetch = async (url: string, options: RequestInit = {}) => {
   return response;
 };
 
-const CacheService = {
-  userId: () => {
-    const user = readStoredUser();
-    return user.userId || user.id || 'anonymous';
-  },
-  set: (key: string, value: unknown) => {
-    try {
-      localStorage.setItem(key, JSON.stringify(value));
-    } catch {
-      // ignore storage errors
-    }
-  },
-  get: (key: string) => {
-    try {
-      const raw = localStorage.getItem(key);
-      return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
-    }
-  },
-  invalidate: (key: string) => {
-    try {
-      localStorage.removeItem(key);
-    } catch {
-      // ignore storage errors
-    }
-  },
-  invalidatePrefix: (prefix: string) => {
-    try {
-      Object.keys(localStorage).forEach((key) => {
-        if (key.startsWith(prefix)) {
-          localStorage.removeItem(key);
-        }
-      });
-    } catch {
-      // ignore storage errors
-    }
-  }
-};
 
 const CACHE_KEYS = {
   PROJECTS: (userId: string) => `presently:projects:${userId}`,
@@ -125,74 +90,216 @@ const CACHE_KEYS = {
   GROUP: (userId: string, groupId: string) => `presently:group:${userId}:${groupId}`,
   GROUP_MESSAGES: (userId: string, groupId: string, subgroupId: string) => `presently:groupMessages:${userId}:${groupId}:${subgroupId}`,
   DIRECT_MESSAGES: (userId: string, recipientId: string) => `presently:directMessages:${userId}:${recipientId}`,
+  DIRECT_MESSAGE_CONTACTS: (userId: string) => `presently:directMessageContacts:${userId}`,
   PROJECT_ISSUES: (userId: string, projectId: string) => `presently:projectIssues:${userId}:${projectId}`,
   PIN_ISSUE: (userId: string, pinId: string) => `presently:pinIssue:${userId}:${pinId}`,
   ISSUE_MESSAGES: (userId: string, issueId: string) => `presently:issueMessages:${userId}:${issueId}`
 };
 
+const CACHE_TTL = {
+  projects: 60 * 1000,
+  project: 2 * 60 * 1000,
+  pins: 60 * 1000,
+  groups: 2 * 60 * 1000,
+  group: 2 * 60 * 1000,
+  profile: 5 * 60 * 1000,
+  subscription: 60 * 1000,
+  users: 5 * 60 * 1000,
+  issues: 30 * 1000,
+  assignees: 2 * 60 * 1000,
+  messages: 15 * 1000
+};
+
+const inFlightRequests = new Map<string, Promise<unknown>>();
+
+class ApiError extends Error {
+  status: number;
+  data?: unknown;
+
+  constructor(message: string, status: number, data?: unknown) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.data = data;
+  }
+}
+
+type CacheEntry<T> = {
+  data: T;
+  cachedAt: number;
+};
+
+const getCacheEntry = <T>(key: string): CacheEntry<T> | null => {
+  try {
+    const entry = CacheService.get<T>(key) as CacheEntry<T> | null;
+
+    if (!entry) return null;
+
+    // Supports the new { data, cachedAt } cache format.
+    if (
+      typeof entry === 'object' &&
+      'data' in entry &&
+      'cachedAt' in entry
+    ) {
+      return entry;
+    }
+
+    // Backwards compatibility with an older raw-value cache.
+    return {
+      data: entry as T,
+      cachedAt: 0
+    };
+  } catch {
+    return null;
+  }
+};
+
+const getCacheData = <T>(key: string): T | null => {
+  return getCacheEntry<T>(key)?.data ?? null;
+};
+
+const getRequestKey = (url: string) =>
+  `${CacheService.userId()}::${url}`;
+
+const fetchJson = async <T>(
+  url: string,
+  errorMessage: string
+): Promise<T> => {
+  const response = await authFetch(url);
+
+  let payload: unknown = null;
+
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+
+  if (!response.ok) {
+    const serverMessage =
+      payload &&
+      typeof payload === 'object' &&
+      'error' in payload &&
+      typeof (payload as { error?: unknown }).error === 'string'
+        ? (payload as { error: string }).error
+        : undefined;
+
+    throw new ApiError(
+      serverMessage || errorMessage,
+      response.status,
+      payload
+    );
+  }
+
+  return payload as T;
+};
+
+const refreshCached = async <T>(
+  key: string,
+  url: string,
+  errorMessage: string
+): Promise<T> => {
+  const requestKey = getRequestKey(url);
+  const existing = inFlightRequests.get(requestKey);
+
+  if (existing) {
+    return existing as Promise<T>;
+  }
+
+  const request = fetchJson<T>(url, errorMessage)
+    .then(data => {
+      CacheService.set(key, data);
+      return data;
+    })
+    .finally(() => {
+      inFlightRequests.delete(requestKey);
+    });
+
+  inFlightRequests.set(requestKey, request);
+
+  return request;
+};
+
+const getCachedOrFetch = async <T>(
+  key: string,
+  url: string,
+  ttl: number,
+  errorMessage: string
+): Promise<T> => {
+  const cached = getCacheEntry<T>(key);
+
+  if (cached) {
+    const age = Math.max(0, Date.now() - cached.cachedAt);
+
+    // Fresh cache: return immediately and do not hit the API.
+    if (age < ttl) {
+      return cached.data;
+    }
+
+    // Stale cache: return immediately and silently refresh.
+    void refreshCached<T>(key, url, errorMessage).catch(() => {
+      // Keep stale data when background refresh fails.
+    });
+
+    return cached.data;
+  }
+
+  // No cache: first visit must wait for the API.
+  return refreshCached<T>(key, url, errorMessage);
+};
+
 const projectListPrefix = () => {
   const userId = CacheService.userId();
-  return CACHE_KEYS.PROJECTS(userId).slice(0, CACHE_KEYS.PROJECTS(userId).lastIndexOf(':') + 1);
+  const key = CACHE_KEYS.PROJECTS(userId);
+  return key.slice(0, key.lastIndexOf(':') + 1);
 };
 
 const pinListPrefix = (projectId: string, view = '') => {
   const userId = CacheService.userId();
-  return CACHE_KEYS.PINS(userId, projectId, view).slice(0, CACHE_KEYS.PINS(userId, projectId, view).lastIndexOf(':') + 1);
+  const key = CACHE_KEYS.PINS(userId, projectId, view);
+  return key.slice(0, key.lastIndexOf(':') + 1);
 };
 
 export const ApiService = {
-  async getProjects(): Promise<Project[]> {
-    // Return cached projects immediately if available to improve perceived load times,
-    // then refresh the cache in the background.
-    try {
-      const key = CACHE_KEYS.PROJECTS(CacheService.userId());
-      const cached = CacheService.get(key) as Project[] | null;
-      if (cached && cached.length) {
-        // Kick off a background refresh but don't await it
-        (async () => {
-          try {
-            const resp = await authFetch(`${API_BASE}/projects`);
-            if (resp.ok) {
-              const fresh = (await resp.json()) as Project[];
-              CacheService.set(key, fresh);
-            }
-          } catch {}
-        })();
-        return cached;
-      }
+  async getProjects(): Promise<ProjectSummary[]> {
+    const key = CACHE_KEYS.PROJECTS(CacheService.userId());
 
-      const response = await authFetch(`${API_BASE}/projects`);
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch projects');
-      }
-
-      const data = (await response.json()) as Project[];
-      CacheService.set(CACHE_KEYS.PROJECTS(CacheService.userId()), data);
-      return data;
-    } catch (err) {
-      // Fallback to network call if cache read caused issues
-      const response = await authFetch(`${API_BASE}/projects`);
-      if (!response.ok) throw new Error('Failed to fetch projects');
-      const data = (await response.json()) as Project[];
-      CacheService.set(CACHE_KEYS.PROJECTS(CacheService.userId()), data);
-      return data;
-    }
+    return getCachedOrFetch<ProjectSummary[]>(
+      key,
+      `${API_BASE}/projects`,
+      CACHE_TTL.projects,
+      'Failed to fetch projects'
+    );
   },
 
-  async getProject(projectId: string, view?: 'draft' | 'live'): Promise<Project> {
-    const url = view ? `${API_BASE}/projects/${projectId}?view=${view}` : `${API_BASE}/projects/${projectId}`;
-    const response = await authFetch(url);
+  async getProject(
+    projectId: string,
+    view?: 'draft' | 'live'
+  ): Promise<Project> {
+    const url = view
+      ? `${API_BASE}/projects/${projectId}?view=${view}`
+      : `${API_BASE}/projects/${projectId}`;
 
-    if (!response.ok) {
-      throw new Error('Project not found');
+    // Live published views remain network-based because they are public
+    // and should not be mixed with a user's private draft cache.
+    if (view === 'live') {
+      return fetchJson<Project>(
+        url,
+        'Project not found'
+      );
     }
 
-    const data = (await response.json()) as Project;
-    if (!view || view !== 'live') {
-      CacheService.set(CACHE_KEYS.PROJECT(CacheService.userId(), projectId), data);
-    }
-    return data;
+    const key = CACHE_KEYS.PROJECT(
+      CacheService.userId(),
+      projectId
+    );
+
+    return getCachedOrFetch<Project>(
+      key,
+      url,
+      CACHE_TTL.project,
+      'Project not found'
+    );
   },
 
   async createProject(data: Record<string, unknown>): Promise<Project> {
@@ -279,23 +386,30 @@ export const ApiService = {
 
   async getProjectAssignees(projectId: string): Promise<{
     projectAssignees: AssigneeOption[];
-    otherGroups: { id: string; name: string; type: GroupType; members: AssigneeOption[] }[];
-    permissions: { isProjectGroupMember: boolean; canAssign: boolean; canCrossGroupSearch: boolean; isTeamMember: boolean };
-  }> {
-    const response = await authFetch(`${API_BASE}/projects/${projectId}/assignees`);
-
-    if (!response.ok) {
-      throw new Error('Failed to fetch assignees');
-    }
-
-    const data = (await response.json()) as {
-      projectAssignees: AssigneeOption[];
-      otherGroups: { id: string; name: string; type: GroupType; members: AssigneeOption[] }[];
-      permissions: { isProjectGroupMember: boolean; canAssign: boolean; canCrossGroupSearch: boolean; isTeamMember: boolean };
+    otherGroups: {
+      id: string;
+      name: string;
+      type: GroupType;
+      members: AssigneeOption[];
+    }[];
+    permissions: {
+      isProjectGroupMember: boolean;
+      canAssign: boolean;
+      canCrossGroupSearch: boolean;
+      isTeamMember: boolean;
     };
+  }> {
+    const key = CACHE_KEYS.PROJECT_ASSIGNEES(
+      CacheService.userId(),
+      projectId
+    );
 
-    CacheService.set(CACHE_KEYS.PROJECT_ASSIGNEES(CacheService.userId(), projectId), data);
-    return data;
+    return getCachedOrFetch(
+      key,
+      `${API_BASE}/projects/${projectId}/assignees`,
+      CACHE_TTL.assignees,
+      'Failed to fetch assignees'
+    );
   },
 
   async addPage(projectId: string, data: { name: string; imageUrl: string; originalUrl?: string }) {
@@ -342,19 +456,34 @@ export const ApiService = {
     return result;
   },
 
-  async getPins(projectId: string, view?: 'draft' | 'live') {
-    const url = view ? `${API_BASE}/projects/${projectId}/pins?view=${view}` : `${API_BASE}/projects/${projectId}/pins`;
-    const response = await authFetch(url);
+  async getPins(
+    projectId: string,
+    view?: 'draft' | 'live'
+  ): Promise<Pin[]> {
+    const url = view
+      ? `${API_BASE}/projects/${projectId}/pins?view=${view}`
+      : `${API_BASE}/projects/${projectId}/pins`;
 
-    if (!response.ok) {
-      throw new Error('Failed to fetch pins');
+    // Public live pins are not stored in the private user cache.
+    if (view === 'live') {
+      return fetchJson<Pin[]>(
+        url,
+        'Failed to fetch pins'
+      );
     }
 
-    const data = await response.json();
-    if (!view || view !== 'live') {
-      CacheService.set(CACHE_KEYS.PINS(CacheService.userId(), projectId, view || 'default'), data);
-    }
-    return data;
+    const key = CACHE_KEYS.PINS(
+      CacheService.userId(),
+      projectId,
+      view || 'default'
+    );
+
+    return getCachedOrFetch<Pin[]>(
+      key,
+      url,
+      CACHE_TTL.pins,
+      'Failed to fetch pins'
+    );
   },
 
   async createPin(projectId: string, data: Record<string, unknown>) {
@@ -408,51 +537,105 @@ export const ApiService = {
   },
 
   async getSubscriptionStatus() {
-    const response = await authFetch(`${API_BASE}/subscription/status`);
+    const key = CACHE_KEYS.SUBSCRIPTION_STATUS(
+      CacheService.userId()
+    );
 
-    if (!response.ok) {
-      throw new Error('Failed to check subscription');
-    }
-
-    const data = await response.json();
-    CacheService.set(CACHE_KEYS.SUBSCRIPTION_STATUS(CacheService.userId()), data);
-    return data;
+    return getCachedOrFetch(
+      key,
+      `${API_BASE}/subscription/status`,
+      CACHE_TTL.subscription,
+      'Failed to check subscription'
+    );
   },
 
   async searchUsers(email: string): Promise<UserSearchResult[]> {
-    const response = await authFetch(`${API_BASE}/users/search?email=${encodeURIComponent(email)}`);
+    const normalized = email.trim().toLowerCase();
+    const key = CACHE_KEYS.USER_SEARCH(
+      CacheService.userId(),
+      normalized
+    );
 
-    if (!response.ok) {
-      throw new Error('Failed to search users');
-    }
+    return getCachedOrFetch<UserSearchResult[]>(
+      key,
+      `${API_BASE}/users/search?email=${encodeURIComponent(normalized)}`,
+      CACHE_TTL.users,
+      'Failed to search users'
+    );
+  },
 
-    const data = (await response.json()) as UserSearchResult[];
-    CacheService.set(CACHE_KEYS.USER_SEARCH(CacheService.userId(), email), data);
-    return data;
+    async getDirectMessageContacts(): Promise<Array<{
+    _id: string;
+    name: string;
+    email: string;
+    avatarUrl?: string;
+    lastMessageAt?: string;
+  }>> {
+    const key = CACHE_KEYS.DIRECT_MESSAGE_CONTACTS(
+      CacheService.userId()
+    );
+
+    return getCachedOrFetch(
+      key,
+      `${API_BASE}/messages/direct/contacts`,
+      CACHE_TTL.users,
+      'Failed to fetch direct message contacts'
+    );
   },
 
   async getAllUsers(): Promise<UserSearchResult[]> {
-    const response = await authFetch(`${API_BASE}/users/all`);
+    const key = CACHE_KEYS.USERS_ALL(
+      CacheService.userId()
+    );
 
-    if (!response.ok) {
-      throw new Error('Failed to fetch users');
-    }
-
-    const data = (await response.json()) as UserSearchResult[];
-    CacheService.set(CACHE_KEYS.USERS_ALL(CacheService.userId()), data);
-    return data;
+    return getCachedOrFetch<UserSearchResult[]>(
+      key,
+      `${API_BASE}/users/all`,
+      CACHE_TTL.users,
+      'Failed to fetch users'
+    );
   },
 
-  async getMyProfile(): Promise<UserProfile> {
-    const response = await authFetch(`${API_BASE}/users/me`);
+    async getUserAvatars(
+    userIds: string[]
+  ): Promise<Array<{
+    _id: string;
+    avatarUrl?: string;
+  }>> {
+    const ids = [
+      ...new Set(
+        userIds
+          .map(id => id?.toString())
+          .filter(Boolean)
+      )
+    ];
 
-    if (!response.ok) {
-      throw new Error('Failed to fetch profile');
+    if (!ids.length) {
+      return [];
     }
 
-    const data = (await response.json()) as UserProfile;
-    CacheService.set(CACHE_KEYS.MY_PROFILE(CacheService.userId()), data);
-    return data;
+    const response = await authFetch(
+      `${API_BASE}/users/avatars?ids=${encodeURIComponent(ids.join(','))}`
+    );
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch user avatars');
+    }
+
+    return response.json();
+  },
+  
+  async getMyProfile(): Promise<UserProfile> {
+    const key = CACHE_KEYS.MY_PROFILE(
+      CacheService.userId()
+    );
+
+    return getCachedOrFetch<UserProfile>(
+      key,
+      `${API_BASE}/users/me`,
+      CACHE_TTL.profile,
+      'Failed to fetch profile'
+    );
   },
 
   async updateMyProfile(updates: Partial<UserProfile>): Promise<UserProfile> {
@@ -472,27 +655,30 @@ export const ApiService = {
   },
 
   async getGroups(): Promise<Group[]> {
-    const response = await authFetch(`${API_BASE}/groups`);
+    const key = CACHE_KEYS.GROUPS(
+      CacheService.userId()
+    );
 
-    if (!response.ok) {
-      throw new Error('Failed to fetch groups');
-    }
-
-    const data = (await response.json()) as Group[];
-    CacheService.set(CACHE_KEYS.GROUPS(CacheService.userId()), data);
-    return data;
+    return getCachedOrFetch<Group[]>(
+      key,
+      `${API_BASE}/groups`,
+      CACHE_TTL.groups,
+      'Failed to fetch groups'
+    );
   },
 
   async getGroup(groupId: string): Promise<Group> {
-    const response = await authFetch(`${API_BASE}/groups/${groupId}`);
+    const key = CACHE_KEYS.GROUP(
+      CacheService.userId(),
+      groupId
+    );
 
-    if (!response.ok) {
-      throw new Error('Failed to fetch group');
-    }
-
-    const data = (await response.json()) as Group;
-    CacheService.set(CACHE_KEYS.GROUP(CacheService.userId(), groupId), data);
-    return data;
+    return getCachedOrFetch<Group>(
+      key,
+      `${API_BASE}/groups/${groupId}`,
+      CACHE_TTL.group,
+      'Failed to fetch group'
+    );
   },
 
   async createGroup(data: { name: string; type: GroupType; description?: string }): Promise<Group> {
@@ -676,39 +862,83 @@ export const ApiService = {
     return result;
   },
 
-  async getGroupMessages(groupId: string, subgroupId?: string): Promise<ChatMessage[]> {
-    // Backwards-compatible: fetch up to 500 messages (original behaviour)
-    return this.getGroupMessagesPage(groupId, subgroupId, undefined, 500);
+  async getGroupMessages(
+    groupId: string,
+    subgroupId?: string
+  ): Promise<ChatMessage[]> {
+    const key = CACHE_KEYS.GROUP_MESSAGES(
+      CacheService.userId(),
+      groupId,
+      subgroupId || 'general'
+    );
+
+    const cached = getCacheData<ChatMessage[]>(key);
+
+    // Preserve the historical "up to 500" contract.
+    // If a smaller paginated cache exists, fetch the full compatibility payload.
+    if (cached && cached.length >= 500) {
+      return cached;
+    }
+
+    return this.getGroupMessagesPage(
+      groupId,
+      subgroupId,
+      undefined,
+      500
+    );
   },
 
-  async getGroupMessagesPage(groupId: string, subgroupId?: string, before?: string | undefined, limit = 30): Promise<ChatMessage[]> {
+  async getGroupMessagesPage(
+    groupId: string,
+    subgroupId?: string,
+    before?: string,
+    limit = 30
+  ): Promise<ChatMessage[]> {
+    const safeLimit = Math.min(Math.max(limit, 1), 500);
     const params = new URLSearchParams();
-    params.set('limit', String(limit));
+
+    params.set('limit', String(safeLimit));
+
     if (before) params.set('before', before);
     if (subgroupId) params.set('subgroupId', subgroupId);
+
     const url = `${API_BASE}/groups/${groupId}/messages?${params.toString()}`;
 
-    const response = await authFetch(url);
-    if (!response.ok) throw new Error('Failed to fetch messages');
-    const data = (await response.json()) as ChatMessage[];
-    const key = CACHE_KEYS.GROUP_MESSAGES(CacheService.userId(), groupId, subgroupId || 'general');
-    try {
-      const cached = CacheService.get(key) as ChatMessage[] | null;
-      if (!before) {
-        CacheService.set(key, data);
+    const key = CACHE_KEYS.GROUP_MESSAGES(
+      CacheService.userId(),
+      groupId,
+      subgroupId || 'general'
+    );
+
+    // Older pages are pagination requests and should always hit the server.
+    if (before) {
+      const data = await fetchJson<ChatMessage[]>(
+        url,
+        'Failed to fetch messages'
+      );
+
+      const cached = getCacheData<ChatMessage[]>(key);
+
+      if (cached && Array.isArray(cached)) {
+        const ids = new Set(cached.map(message => message.id));
+        CacheService.set(key, [
+          ...data.filter(message => !ids.has(message.id)),
+          ...cached
+        ]);
       } else {
-        // prepend older messages to cache
-        if (cached && Array.isArray(cached)) {
-          // avoid duplicates by id
-          const ids = new Set(cached.map(m => m.id));
-          const merged = [...data.filter(m => !ids.has(m.id)), ...cached];
-          CacheService.set(key, merged);
-        } else {
-          CacheService.set(key, [...data]);
-        }
+        CacheService.set(key, data);
       }
-    } catch {}
-    return data;
+
+      return data;
+    }
+
+    // Initial page: cache-first + stale-while-revalidate.
+    return getCachedOrFetch<ChatMessage[]>(
+      key,
+      url,
+      CACHE_TTL.messages,
+      'Failed to fetch messages'
+    );
   },
 
   async sendGroupMessage(groupId: string, data: { content: string; subgroupId?: string; visibility?: MessageVisibility }): Promise<ChatMessage> {
@@ -725,42 +955,82 @@ export const ApiService = {
     const msg = (await response.json()) as ChatMessage;
     try {
       const key = CACHE_KEYS.GROUP_MESSAGES(CacheService.userId(), groupId, data.subgroupId || 'general');
-      const cached = CacheService.get(key) as ChatMessage[] | null;
+      const cached = CacheService.getData<ChatMessage[]>(key);
       if (cached && Array.isArray(cached)) CacheService.set(key, [...cached, msg]);
       else CacheService.set(key, [msg]);
     } catch {}
     return msg;
   },
 
-  async getDirectMessages(recipientId: string): Promise<ChatMessage[]> {
-    return this.getDirectMessagesPage(recipientId, undefined, 500);
+  async getDirectMessages(
+    recipientId: string
+  ): Promise<ChatMessage[]> {
+    const key = CACHE_KEYS.DIRECT_MESSAGES(
+      CacheService.userId(),
+      recipientId
+    );
+
+    const cached = getCacheData<ChatMessage[]>(key);
+
+    if (cached && cached.length >= 500) {
+      return cached;
+    }
+
+    return this.getDirectMessagesPage(
+      recipientId,
+      undefined,
+      500
+    );
   },
 
-  async getDirectMessagesPage(recipientId: string, before?: string | undefined, limit = 30): Promise<ChatMessage[]> {
+  async getDirectMessagesPage(
+    recipientId: string,
+    before?: string,
+    limit = 30
+  ): Promise<ChatMessage[]> {
+    const safeLimit = Math.min(Math.max(limit, 1), 500);
     const params = new URLSearchParams();
-    params.set('limit', String(limit));
-    if (before) params.set('before', before);
-    const url = `${API_BASE}/messages/direct/${recipientId}?${params.toString()}`;
 
-    const response = await authFetch(url);
-    if (!response.ok) throw new Error('Failed to fetch messages');
-    const data = (await response.json()) as ChatMessage[];
-    const key = CACHE_KEYS.DIRECT_MESSAGES(CacheService.userId(), recipientId);
-    try {
-      const cached = CacheService.get(key) as ChatMessage[] | null;
-      if (!before) {
-        CacheService.set(key, data);
+    params.set('limit', String(safeLimit));
+
+    if (before) params.set('before', before);
+
+    const url =
+      `${API_BASE}/messages/direct/${recipientId}?${params.toString()}`;
+
+    const key = CACHE_KEYS.DIRECT_MESSAGES(
+      CacheService.userId(),
+      recipientId
+    );
+
+    // Older pages always go to the server.
+    if (before) {
+      const data = await fetchJson<ChatMessage[]>(
+        url,
+        'Failed to fetch messages'
+      );
+
+      const cached = getCacheData<ChatMessage[]>(key);
+
+      if (cached && Array.isArray(cached)) {
+        const ids = new Set(cached.map(message => message.id));
+        CacheService.set(key, [
+          ...data.filter(message => !ids.has(message.id)),
+          ...cached
+        ]);
       } else {
-        if (cached && Array.isArray(cached)) {
-          const ids = new Set(cached.map(m => m.id));
-          const merged = [...data.filter(m => !ids.has(m.id)), ...cached];
-          CacheService.set(key, merged);
-        } else {
-          CacheService.set(key, [...data]);
-        }
+        CacheService.set(key, data);
       }
-    } catch {}
-    return data;
+
+      return data;
+    }
+
+    return getCachedOrFetch<ChatMessage[]>(
+      key,
+      url,
+      CACHE_TTL.messages,
+      'Failed to fetch messages'
+    );
   },
 
   async sendDirectMessage(recipientId: string, content: string): Promise<ChatMessage> {
@@ -777,65 +1047,73 @@ export const ApiService = {
     const msg = (await response.json()) as ChatMessage;
     try {
       const key = CACHE_KEYS.DIRECT_MESSAGES(CacheService.userId(), recipientId);
-      const cached = CacheService.get(key) as ChatMessage[] | null;
+      const cached = CacheService.getData<ChatMessage[]>(key);
       if (cached && Array.isArray(cached)) CacheService.set(key, [...cached, msg]);
       else CacheService.set(key, [msg]);
     } catch {}
     return msg;
   },
 
-  async getProjectIssues(projectId: string): Promise<AnnotationIssue[]> {
-    const response = await authFetch(`${API_BASE}/projects/${projectId}/issues`);
+  async getProjectIssues(
+    projectId: string
+  ): Promise<AnnotationIssue[]> {
+    const key = CACHE_KEYS.PROJECT_ISSUES(
+      CacheService.userId(),
+      projectId
+    );
 
-    if (!response.ok) {
-      throw new Error('Failed to fetch issues');
-    }
-
-    const data = (await response.json()) as AnnotationIssue[];
-    CacheService.set(CACHE_KEYS.PROJECT_ISSUES(CacheService.userId(), projectId), data);
-    return data;
+    return getCachedOrFetch<AnnotationIssue[]>(
+      key,
+      `${API_BASE}/projects/${projectId}/issues`,
+      CACHE_TTL.issues,
+      'Failed to fetch issues'
+    );
   },
 
-  async getPinIssue(pinId: string): Promise<AnnotationIssue | null> {
-    const key = CACHE_KEYS.PIN_ISSUE(CacheService.userId(), pinId);
+  async getPinIssue(
+    pinId: string
+  ): Promise<AnnotationIssue | null> {
+    const key = CACHE_KEYS.PIN_ISSUE(
+      CacheService.userId(),
+      pinId
+    );
+
+    const cached = getCacheEntry<AnnotationIssue | null>(key);
+
+    if (cached) {
+      const age = Math.max(
+        0,
+        Date.now() - cached.cachedAt
+      );
+
+      if (age < CACHE_TTL.issues) {
+        return cached.data;
+      }
+
+      void refreshCached<AnnotationIssue | null>(
+        key,
+        `${API_BASE}/pins/${pinId}/issue`,
+        'Failed to fetch issue'
+      ).catch(() => {});
+
+      return cached.data;
+    }
+
     try {
-      const cached = CacheService.get(key) as AnnotationIssue | null;
-      if (cached) {
-        // Refresh in background
-        (async () => {
-          try {
-            const resp = await authFetch(`${API_BASE}/pins/${pinId}/issue`);
-            if (resp.ok) {
-              const fresh = (await resp.json()) as AnnotationIssue | null;
-              CacheService.set(key, fresh);
-            }
-          } catch {}
-        })();
-        return cached;
+      return await refreshCached<AnnotationIssue | null>(
+        key,
+        `${API_BASE}/pins/${pinId}/issue`,
+        'Failed to fetch issue'
+      );
+    } catch (error) {
+      if (
+        error instanceof ApiError &&
+        error.status === 403
+      ) {
+        return null;
       }
 
-      const response = await authFetch(`${API_BASE}/pins/${pinId}/issue`);
-
-      if (!response.ok) {
-        if (response.status === 403) {
-          return null;
-        }
-        throw new Error('Failed to fetch issue');
-      }
-
-      const data = (await response.json()) as AnnotationIssue | null;
-      CacheService.set(key, data);
-      return data;
-    } catch (e) {
-      // final attempt network-only
-      const response = await authFetch(`${API_BASE}/pins/${pinId}/issue`);
-      if (!response.ok) {
-        if (response.status === 403) return null;
-        throw new Error('Failed to fetch issue');
-      }
-      const data = (await response.json()) as AnnotationIssue | null;
-      CacheService.set(key, data);
-      return data;
+      throw error;
     }
   },
 
@@ -898,36 +1176,75 @@ export const ApiService = {
     return result;
   },
 
-  async getIssueMessages(issueId: string): Promise<AnnotationMessage[]> {
-    // Backwards-compatible: fetch up to 500 messages (original behaviour)
-    return this.getIssueMessagesPage(issueId, undefined, 500);
+  async getIssueMessages(
+    issueId: string
+  ): Promise<AnnotationMessage[]> {
+    const key = CACHE_KEYS.ISSUE_MESSAGES(
+      CacheService.userId(),
+      issueId
+    );
+
+    const cached = getCacheData<AnnotationMessage[]>(key);
+
+    if (cached && cached.length >= 500) {
+      return cached;
+    }
+
+    return this.getIssueMessagesPage(
+      issueId,
+      undefined,
+      500
+    );
   },
 
-  async getIssueMessagesPage(issueId: string, before?: string | undefined, limit = 30): Promise<AnnotationMessage[]> {
+  async getIssueMessagesPage(
+    issueId: string,
+    before?: string,
+    limit = 30
+  ): Promise<AnnotationMessage[]> {
+    const safeLimit = Math.min(Math.max(limit, 1), 500);
     const params = new URLSearchParams();
-    params.set('limit', String(limit));
-    if (before) params.set('before', before);
-    const url = `${API_BASE}/issues/${issueId}/messages?${params.toString()}`;
 
-    const response = await authFetch(url);
-    if (!response.ok) throw new Error('Failed to fetch issue messages');
-    const data = (await response.json()) as AnnotationMessage[];
-    const key = CACHE_KEYS.ISSUE_MESSAGES(CacheService.userId(), issueId);
-    try {
-      const cached = CacheService.get(key) as AnnotationMessage[] | null;
-      if (!before) {
-        CacheService.set(key, data);
+    params.set('limit', String(safeLimit));
+
+    if (before) params.set('before', before);
+
+    const url =
+      `${API_BASE}/issues/${issueId}/messages?${params.toString()}`;
+
+    const key = CACHE_KEYS.ISSUE_MESSAGES(
+      CacheService.userId(),
+      issueId
+    );
+
+    // Older pages always go to the server.
+    if (before) {
+      const data = await fetchJson<AnnotationMessage[]>(
+        url,
+        'Failed to fetch issue messages'
+      );
+
+      const cached = getCacheData<AnnotationMessage[]>(key);
+
+      if (cached && Array.isArray(cached)) {
+        const ids = new Set(cached.map(message => message.id));
+        CacheService.set(key, [
+          ...data.filter(message => !ids.has(message.id)),
+          ...cached
+        ]);
       } else {
-        if (cached && Array.isArray(cached)) {
-          const ids = new Set(cached.map(m => m.id));
-          const merged = [...data.filter(m => !ids.has(m.id)), ...cached];
-          CacheService.set(key, merged);
-        } else {
-          CacheService.set(key, [...data]);
-        }
+        CacheService.set(key, data);
       }
-    } catch {}
-    return data;
+
+      return data;
+    }
+
+    return getCachedOrFetch<AnnotationMessage[]>(
+      key,
+      url,
+      CACHE_TTL.messages,
+      'Failed to fetch issue messages'
+    );
   },
 
   async sendIssueMessage(issueId: string, content: string, visibility: MessageVisibility = 'all'): Promise<AnnotationMessage> {
@@ -944,7 +1261,7 @@ export const ApiService = {
     const msg = (await response.json()) as AnnotationMessage;
     try {
       const key = CACHE_KEYS.ISSUE_MESSAGES(CacheService.userId(), issueId);
-      const cached = CacheService.get(key) as AnnotationMessage[] | null;
+      const cached = CacheService.getData<AnnotationMessage[]>(key);
       if (cached && Array.isArray(cached)) {
         CacheService.set(key, [...cached, msg]);
       } else {
@@ -954,70 +1271,115 @@ export const ApiService = {
     return msg;
   }
   ,
-  // Cache-read helpers (synchronous) to enable immediate UI rendering from localStorage
-  getCachedProjects(): Project[] | null {
-    try {
-      const key = CACHE_KEYS.PROJECTS(CacheService.userId());
-      return CacheService.get(key) as Project[] | null;
-    } catch {
-      return null;
-    }
+  // Synchronous cache-read helpers for instant UI hydration.
+  getCachedProjects(): ProjectSummary[] | null {
+    return getCacheData<ProjectSummary[]>(
+      CACHE_KEYS.PROJECTS(CacheService.userId())
+    );
   },
+
+  getCachedProject(projectId: string): Project | null {
+    return getCacheData<Project>(
+      CACHE_KEYS.PROJECT(
+        CacheService.userId(),
+        projectId
+      )
+    );
+  },
+
+  getCachedPins(
+    projectId: string,
+    view: 'draft' | 'live' | '' = ''
+  ): Pin[] | null {
+    if (view === 'live') return null;
+
+    return getCacheData<Pin[]>(
+      CACHE_KEYS.PINS(
+        CacheService.userId(),
+        projectId,
+        view || 'default'
+      )
+    );
+  },
+
   getCachedGroups(): Group[] | null {
-    try {
-      const key = CACHE_KEYS.GROUPS(CacheService.userId());
-      return CacheService.get(key) as Group[] | null;
-    } catch {
-      return null;
-    }
+    return getCacheData<Group[]>(
+      CACHE_KEYS.GROUPS(CacheService.userId())
+    );
   },
-  getCachedGroupMessages(groupId: string, subgroupId?: string): ChatMessage[] | null {
-    try {
-      const key = CACHE_KEYS.GROUP_MESSAGES(CacheService.userId(), groupId, subgroupId || 'general');
-      return CacheService.get(key) as ChatMessage[] | null;
-    } catch {
-      return null;
-    }
+
+  getCachedGroupMessages(
+    groupId: string,
+    subgroupId?: string
+  ): ChatMessage[] | null {
+    return getCacheData<ChatMessage[]>(
+      CACHE_KEYS.GROUP_MESSAGES(
+        CacheService.userId(),
+        groupId,
+        subgroupId || 'general'
+      )
+    );
   },
-  getCachedDirectMessages(recipientId: string): ChatMessage[] | null {
-    try {
-      const key = CACHE_KEYS.DIRECT_MESSAGES(CacheService.userId(), recipientId);
-      return CacheService.get(key) as ChatMessage[] | null;
-    } catch {
-      return null;
-    }
+
+  getCachedDirectMessages(
+    recipientId: string
+  ): ChatMessage[] | null {
+    return getCacheData<ChatMessage[]>(
+      CACHE_KEYS.DIRECT_MESSAGES(
+        CacheService.userId(),
+        recipientId
+      )
+    );
   },
+
   getCachedMyProfile(): UserProfile | null {
-    try {
-      const key = CACHE_KEYS.MY_PROFILE(CacheService.userId());
-      return CacheService.get(key) as UserProfile | null;
-    } catch {
-      return null;
-    }
-  }
-  ,
-  getCachedProjectAssignees(projectId: string): { projectAssignees: AssigneeOption[]; otherGroups: { id: string; name: string; type: GroupType; members: AssigneeOption[] }[]; permissions: { isProjectGroupMember: boolean; canAssign: boolean; canCrossGroupSearch: boolean; isTeamMember: boolean } } | null {
-    try {
-      const key = CACHE_KEYS.PROJECT_ASSIGNEES(CacheService.userId(), projectId);
-      return CacheService.get(key) as any || null;
-    } catch {
-      return null;
-    }
+    return getCacheData<UserProfile>(
+      CACHE_KEYS.MY_PROFILE(CacheService.userId())
+    );
   },
-  getCachedPinIssue(pinId: string): AnnotationIssue | null {
-    try {
-      const key = CACHE_KEYS.PIN_ISSUE(CacheService.userId(), pinId);
-      return CacheService.get(key) as AnnotationIssue | null;
-    } catch {
-      return null;
-    }
+
+  getCachedProjectAssignees(projectId: string): {
+    projectAssignees: AssigneeOption[];
+    otherGroups: {
+      id: string;
+      name: string;
+      type: GroupType;
+      members: AssigneeOption[];
+    }[];
+    permissions: {
+      isProjectGroupMember: boolean;
+      canAssign: boolean;
+      canCrossGroupSearch: boolean;
+      isTeamMember: boolean;
+    };
+  } | null {
+    return getCacheData(
+      CACHE_KEYS.PROJECT_ASSIGNEES(
+        CacheService.userId(),
+        projectId
+      )
+    );
   },
-  getCachedIssueMessages(issueId: string): AnnotationMessage[] | null {
-    try {
-      const key = CACHE_KEYS.ISSUE_MESSAGES(CacheService.userId(), issueId);
-      return CacheService.get(key) as AnnotationMessage[] | null;
-    } catch {
-      return null;
-    }
+
+  getCachedPinIssue(
+    pinId: string
+  ): AnnotationIssue | null {
+    return getCacheData<AnnotationIssue | null>(
+      CACHE_KEYS.PIN_ISSUE(
+        CacheService.userId(),
+        pinId
+      )
+    );
+  },
+
+  getCachedIssueMessages(
+    issueId: string
+  ): AnnotationMessage[] | null {
+    return getCacheData<AnnotationMessage[]>(
+      CACHE_KEYS.ISSUE_MESSAGES(
+        CacheService.userId(),
+        issueId
+      )
+    );
   }
 };
