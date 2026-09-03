@@ -46,11 +46,26 @@ const messageSchema = new mongoose.Schema({
 
 messageSchema.index({ groupId: 1, createdAt: 1 });
 messageSchema.index({ groupId: 1, subgroupId: 1, createdAt: 1 });
-messageSchema.index({ senderId: 1, directRecipientId: 1, createdAt: 1 });
-messageSchema.index({
-  directRecipientId: 1,
-  senderId: 1,
-  createdAt: 1
-});
+messageSchema.index(
+  { senderId: 1, directRecipientId: 1, createdAt: -1 },
+  {
+    name: 'direct_sender_recipient_createdAt',
+    partialFilterExpression: {
+      directRecipientId: { $exists: true },
+      groupId: { $exists: false }
+    }
+  }
+);
+
+messageSchema.index(
+  { directRecipientId: 1, senderId: 1, createdAt: -1 },
+  {
+    name: 'direct_recipient_sender_createdAt',
+    partialFilterExpression: {
+      directRecipientId: { $exists: true },
+      groupId: { $exists: false }
+    }
+  }
+);
 
 module.exports = mongoose.model('Message', messageSchema);

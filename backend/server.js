@@ -44,6 +44,28 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
+// ============================================================
+// API PERFORMANCE MONITOR
+// Logs slow requests so database/network bottlenecks are visible.
+// ============================================================
+
+app.use((req, res, next) => {
+  const startedAt = process.hrtime.bigint();
+
+  res.on('finish', () => {
+    const elapsedMs =
+      Number(process.hrtime.bigint() - startedAt) / 1e6;
+
+    if (elapsedMs >= 250) {
+      console.warn(
+        `[SLOW API] ${req.method} ${req.originalUrl} → ${res.statusCode} in ${elapsedMs.toFixed(1)}ms`
+      );
+    }
+  });
+
+  next();
+});
+
 const PORT = process.env.PORT || 3001;
 
 // Middleware
@@ -51,13 +73,39 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(cookieParser());
 
+// ============================================================
 // MongoDB Connection
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('✅ MongoDB connected successfully'))
-  .catch(err => {
+// Keep a warm connection pool so API requests do not repeatedly
+// pay connection-establishment latency.
+// ============================================================
+
+const connectMongoDB = async () => {
+  try {
+    await mongoose.connect(process.env.MONGODB_URI, {
+      maxPoolSize: 50,
+      minPoolSize: 5,
+      maxIdleTimeMS: 30000,
+      maxConnecting: 5,
+
+      // Fail fast instead of allowing requests to hang for a
+      // long time when MongoDB is unreachable.
+      serverSelectionTimeoutMS: 5000,
+      connectTimeoutMS: 5000,
+
+      // Allow genuinely long-running operations elsewhere in
+      // the application without using socket timeout as the
+      // primary performance mechanism.
+      socketTimeoutMS: 30000
+    });
+
+    console.log('✅ MongoDB connected successfully');
+  } catch (err) {
     console.error('❌ MongoDB connection error:', err.message);
     console.error('Please check your MongoDB URI and network connection');
-  });
+
+    process.exit(1);
+  }
+};
 
 // Razorpay Instance
 const razorpay = new Razorpay({
@@ -2032,8 +2080,14 @@ app.get('/', (req, res) => {
 
 // ==================== SERVER START ====================
 
-app.listen(PORT, () => {
-  console.log(`✅ Screenshot service is running at http://localhost:${PORT}`);
-  console.log(`✅ MongoDB URI: ${process.env.MONGODB_URI ? 'Configured' : 'Missing'}`);
-  console.log(`✅ Payment Method: ${process.env.USE_RAZORPAY === 'true' ? 'Razorpay' : 'Custom'}`);
-});
+const startServer = async () => {
+  await connectMongoDB();
+
+  app.listen(PORT, () => {
+    console.log(`✅ Screenshot service is running at http://localhost:${PORT}`);
+    console.log(`✅ MongoDB URI: ${process.env.MONGODB_URI ? 'Configured' : 'Missing'}`);
+    console.log(`✅ Payment Method: ${process.env.USE_RAZORPAY === 'true' ? 'Razorpay' : 'Custom'}`);
+  });
+};
+
+startServer();

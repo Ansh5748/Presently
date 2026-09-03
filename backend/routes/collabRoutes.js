@@ -261,18 +261,88 @@ app.get('/projects', authenticateToken, async (req, res) => {
   });
   app.get('/users/me', authenticateToken, async (req, res) => {
     try {
-      const user = await User.findById(req.user.id).select('_id name email phone timeZone workingTimeStart workingTimeEnd statusText about avatarUrl createdAt updatedAt isLocalComputeEnabled').lean();
-      if (!user) return res.status(404).json({ error: 'User not found' });
+      const user = await User.findById(req.user.id)
+        .select(
+          '_id name email phone timeZone workingTimeStart workingTimeEnd statusText about createdAt updatedAt isLocalComputeEnabled'
+        )
+        .lean();
+
+      if (!user) {
+        return res.status(404).json({
+          error: 'User not found'
+        });
+      }
+
       res.json(user);
     } catch (error) {
       console.error('[Users Me] Error:', error);
-      res.status(500).json({ error: 'Server error' });
+
+      res.status(500).json({
+        error: 'Server error'
+      });
+    }
+  });
+
+  app.get('/users/me/avatar', authenticateToken, async (req, res) => {
+    try {
+      const user = await User.findById(req.user.id)
+        .select('_id avatarUrl')
+        .lean();
+
+      if (!user) {
+        return res.status(404).json({
+          error: 'User not found'
+        });
+      }
+
+      res.set('Cache-Control', 'private, max-age=300, stale-while-revalidate=600');
+
+      res.json({
+        _id: user._id,
+        avatarUrl: user.avatarUrl || ''
+      });
+    } catch (error) {
+      console.error('[Users Me Avatar] Error:', error);
+
+      res.status(500).json({
+        error: 'Server error'
+      });
+    }
+  });
+
+  app.get('/users/me/avatar/placeholder', authenticateToken, async (req, res) => {
+    try {
+      const user = await User.findById(req.user.id)
+        .select('_id avatarPlaceholderUrl')
+        .lean();
+
+      if (!user) {
+        return res.status(404).json({
+          error: 'User not found'
+        });
+      }
+
+      res.set(
+        'Cache-Control',
+        'private, max-age=2592000, stale-while-revalidate=86400'
+      );
+
+      res.json({
+        _id: user._id,
+        avatarPlaceholderUrl: user.avatarPlaceholderUrl || ''
+      });
+    } catch (error) {
+      console.error('[Users Me Avatar Placeholder] Error:', error);
+
+      res.status(500).json({
+        error: 'Server error'
+      });
     }
   });
 
   app.patch('/users/me', authenticateToken, async (req, res) => {
     try {
-      const allowed = ['name', 'phone', 'timeZone', 'workingTimeStart', 'workingTimeEnd', 'statusText', 'about', 'avatarUrl'];
+      const allowed = ['name', 'phone', 'timeZone', 'workingTimeStart', 'workingTimeEnd', 'statusText', 'about', 'avatarUrl', 'avatarPlaceholderUrl'];
       const updates = {};
       for (const k of allowed) {
         if (!(k in req.body)) continue;
@@ -280,7 +350,10 @@ app.get('/projects', authenticateToken, async (req, res) => {
         if (v === null || v === undefined) { updates[k] = ''; continue; }
         if (typeof v !== 'string') continue;
         if (k === 'avatarUrl') {
-          if (v.length > 2000000) continue;
+          if (v.length > 600000) continue;
+        }
+        if (k === 'avatarPlaceholderUrl') {
+          if (v.length > 15000) continue;
         }
         updates[k] = v;
       }
@@ -297,48 +370,99 @@ app.get('/projects', authenticateToken, async (req, res) => {
   // ==================== USER SEARCH ROUTE ====================
 
     app.get('/users/avatars', authenticateToken, async (req, res) => {
-    try {
-      const rawIds = (req.query.ids || '').toString();
+      try {
+        const rawIds = (req.query.ids || '').toString();
 
-      if (!rawIds.trim()) {
-        return res.json([]);
-      }
-
-      const ids = [
-        ...new Set(
-          rawIds
-            .split(',')
-            .map(id => id.trim())
-            .filter(id => mongoose.Types.ObjectId.isValid(id))
-        )
-      ];
-
-      if (!ids.length) {
-        return res.json([]);
-      }
-
-      const users = await User.find({
-        _id: {
-          $in: ids
+        if (!rawIds.trim()) {
+          return res.json([]);
         }
-      })
-        .select('_id avatarUrl')
-        .lean();
 
-      res.json(
-        users.map(user => ({
-          _id: user._id,
-          avatarUrl: user.avatarUrl || ''
-        }))
-      );
-    } catch (error) {
-      console.error('[User Avatars] Error:', error);
-      res.status(500).json({
-        error: 'Server error'
-      });
-    }
-  });
+        const ids = [
+          ...new Set(
+            rawIds
+              .split(',')
+              .map(id => id.trim())
+              .filter(id => mongoose.Types.ObjectId.isValid(id))
+          )
+        ];
 
+        if (!ids.length) {
+          return res.json([]);
+        }
+
+        const users = await User.find({
+          _id: {
+            $in: ids
+          }
+        })
+          .select('_id avatarPlaceholderUrl')
+          .lean();
+
+        res.set(
+          'Cache-Control',
+          'private, max-age=2592000, stale-while-revalidate=86400'
+        );
+
+        res.json(
+          users.map(user => ({
+            _id: user._id,
+            avatarUrl: user.avatarPlaceholderUrl  || ''
+          }))
+        );
+      } catch (error) {
+        console.error('[User Avatars] Error:', error);
+        res.status(500).json({
+          error: 'Server error'
+        });
+      }
+    });
+
+    app.get('/users/avatars/full', authenticateToken, async (req, res) => {
+      try {
+        const rawIds = (req.query.ids || '').toString();
+
+        if (!rawIds.trim()) {
+          return res.json([]);
+        }
+
+        const ids = [
+          ...new Set(
+            rawIds
+              .split(',')
+              .map(id => id.trim())
+              .filter(id => mongoose.Types.ObjectId.isValid(id))
+          )
+        ];
+
+        if (!ids.length) {
+          return res.json([]);
+        }
+
+        const users = await User.find({
+          _id: { $in: ids }
+        })
+          .select('_id avatarUrl')
+          .lean();
+
+        res.set(
+          'Cache-Control',
+          'private, max-age=2592000, stale-while-revalidate=86400'
+        );
+
+        res.json(
+          users.map(user => ({
+            _id: user._id,
+            avatarUrl: user.avatarUrl || ''
+          }))
+        );
+      } catch (error) {
+        console.error('[User Full Avatars] Error:', error);
+
+        res.status(500).json({
+          error: 'Server error'
+        });
+      }
+    });
 
   app.get('/users/search', authenticateToken, async (req, res) => {
     try {
@@ -958,73 +1082,133 @@ app.get('/projects', authenticateToken, async (req, res) => {
   });
 
       app.get('/messages/direct/contacts', authenticateToken, async (req, res) => {
-    try {
-      const userId = new mongoose.Types.ObjectId(req.user.id);
+        try {
+          const userId = new mongoose.Types.ObjectId(req.user.id);
 
-      const contacts = await Message.aggregate([
-        {
-          $match: {
-            groupId: { $exists: false },
-            directRecipientId: { $exists: true },
-            $or: [
-              { senderId: userId },
-              { directRecipientId: userId }
-            ]
+          // ------------------------------------------------------------
+          // STEP 1
+          // Find only direct-message records involving this user.
+          //
+          // The two branches map directly to the two partial indexes
+          // defined in Message.js.
+          // ------------------------------------------------------------
+
+          const [sentMessages, receivedMessages] = await Promise.all([
+            Message.find({
+              groupId: { $exists: false },
+              directRecipientId: { $exists: true },
+              senderId: userId
+            })
+              .select('directRecipientId createdAt')
+              .sort({ createdAt: -1 })
+              .lean(),
+
+            Message.find({
+              groupId: { $exists: false },
+              directRecipientId: { $exists: true },
+              directRecipientId: userId
+            })
+              .select('senderId createdAt')
+              .sort({ createdAt: -1 })
+              .lean()
+          ]);
+
+          // ------------------------------------------------------------
+          // STEP 2
+          // Build the latest message timestamp for each counterpart.
+          //
+          // Because each query is already sorted newest-first, the first
+          // occurrence of a counterpart is its latest message.
+          // ------------------------------------------------------------
+
+          const latestByUser = new Map();
+
+          for (const message of sentMessages) {
+            const counterpartId = message.directRecipientId?.toString();
+            if (!counterpartId || latestByUser.has(counterpartId)) continue;
+
+            latestByUser.set(counterpartId, message.createdAt);
           }
-        },
-        {
-          $project: {
-            counterpartId: {
-              $cond: [
-                { $eq: ['$senderId', userId] },
-                '$directRecipientId',
-                '$senderId'
-              ]
-            },
-            lastMessageAt: '$createdAt'
+
+          for (const message of receivedMessages) {
+            const counterpartId = message.senderId?.toString();
+            if (!counterpartId) continue;
+
+            const existing = latestByUser.get(counterpartId);
+
+            if (
+              !existing ||
+              new Date(message.createdAt).getTime() >
+                new Date(existing).getTime()
+            ) {
+              latestByUser.set(counterpartId, message.createdAt);
+            }
           }
-        },
-        {
-          $group: {
-            _id: '$counterpartId',
-            lastMessageAt: { $max: '$lastMessageAt' }
+
+          if (latestByUser.size === 0) {
+            return res.json([]);
           }
-        },
-        {
-          $sort: {
-            lastMessageAt: -1
-          }
-        },
-        {
-          $lookup: {
-            from: 'users',
-            localField: '_id',
-            foreignField: '_id',
-            as: 'user'
-          }
-        },
-        {
-          $unwind: '$user'
-        },
-        {
-          $project: {
-            _id: 1,
-            name: '$user.name',
-            email: '$user.email',
-            avatarUrl: '$user.avatarUrl',
-            lastMessageAt: 1
-          }
+
+          // ------------------------------------------------------------
+          // STEP 3
+          // Fetch only the tiny user fields required by the DM sidebar.
+          //
+          // IMPORTANT:
+          // Do NOT load avatarUrl here.
+          // avatarUrl can be a very large data URL in the current schema.
+          // ------------------------------------------------------------
+
+          const counterpartIds = Array.from(latestByUser.keys())
+            .filter(id => mongoose.Types.ObjectId.isValid(id))
+            .map(id => new mongoose.Types.ObjectId(id));
+
+          const users = await User.find({
+            _id: { $in: counterpartIds }
+          })
+            .select('_id name email')
+            .lean();
+
+          const userMap = new Map(
+            users.map(user => [
+              user._id.toString(),
+              user
+            ])
+          );
+
+          // ------------------------------------------------------------
+          // STEP 4
+          // Return exactly the information the frontend needs.
+          // ------------------------------------------------------------
+
+          const contacts = Array.from(latestByUser.entries())
+            .map(([userIdString, lastMessageAt]) => {
+              const user = userMap.get(userIdString);
+
+              if (!user) return null;
+
+              return {
+                _id: user._id,
+                name: user.name || 'User',
+                email: user.email || '',
+                lastMessageAt
+              };
+            })
+            .filter(Boolean)
+            .sort(
+              (a, b) =>
+                new Date(b.lastMessageAt).getTime() -
+                new Date(a.lastMessageAt).getTime()
+            );
+
+          res.json(contacts);
+        } catch (error) {
+          console.error('[Direct Message Contacts] Error:', error);
+
+          res.status(500).json({
+            error: 'Server error'
+          });
         }
-      ]);
-
-      res.json(contacts);
-    } catch (error) {
-      console.error('[Direct Message Contacts] Error:', error);
-      res.status(500).json({
-        error: 'Server error'
       });
-    }
-  });
   
   app.get('/messages/direct/:recipientId', authenticateToken, async (req, res) => {
     try {

@@ -49,6 +49,11 @@ const userSchema = new mongoose.Schema({
     default: '',
     trim: true
   },
+  avatarPlaceholderUrl: { 
+    type: String, 
+    default: '', 
+    trim: true 
+  },
   password: {
     type: String,
     required: true

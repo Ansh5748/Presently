@@ -86,6 +86,7 @@ const CACHE_KEYS = {
   USER_SEARCH: (userId: string, email: string) => `presently:userSearch:${userId}:${email}`,
   USERS_ALL: (userId: string) => `presently:users:${userId}`,
   MY_PROFILE: (userId: string) => `presently:myProfile:${userId}`,
+  MY_AVATAR: (userId: string) => `presently:myAvatar:${userId}`,
   GROUPS: (userId: string) => `presently:groups:${userId}`,
   GROUP: (userId: string, groupId: string) => `presently:group:${userId}:${groupId}`,
   GROUP_MESSAGES: (userId: string, groupId: string, subgroupId: string) => `presently:groupMessages:${userId}:${groupId}:${subgroupId}`,
@@ -105,6 +106,7 @@ const CACHE_TTL = {
   profile: 5 * 60 * 1000,
   subscription: 60 * 1000,
   users: 5 * 60 * 1000,
+  avatar: 30 * 24 * 60 * 60 * 1000,
   issues: 30 * 1000,
   assignees: 2 * 60 * 1000,
   messages: 15 * 1000
@@ -597,6 +599,35 @@ export const ApiService = {
   },
 
     async getUserAvatars(
+      userIds: string[]
+    ): Promise<Array<{
+      _id: string;
+      avatarUrl?: string;
+    }>> {
+      const ids = [
+        ...new Set(
+          userIds
+            .map(id => id?.toString())
+            .filter(Boolean)
+        )
+      ].sort();
+
+      if (!ids.length) {
+        return [];
+      }
+
+      const key =
+        `presently:userAvatars:placeholder:${CacheService.userId()}:${ids.join(',')}`;
+
+      return getCachedOrFetch(
+        key,
+        `${API_BASE}/users/avatars?ids=${encodeURIComponent(ids.join(','))}`,
+        CACHE_TTL.avatar,
+        'Failed to fetch user avatars'
+      );
+    },
+
+  async getUserFullAvatars(
     userIds: string[]
   ): Promise<Array<{
     _id: string;
@@ -608,23 +639,23 @@ export const ApiService = {
           .map(id => id?.toString())
           .filter(Boolean)
       )
-    ];
+    ].sort();
 
     if (!ids.length) {
       return [];
     }
 
-    const response = await authFetch(
-      `${API_BASE}/users/avatars?ids=${encodeURIComponent(ids.join(','))}`
+    const key =
+      `presently:userAvatars:full:${CacheService.userId()}:${ids.join(',')}`;
+
+    return getCachedOrFetch(
+      key,
+      `${API_BASE}/users/avatars/full?ids=${encodeURIComponent(ids.join(','))}`,
+      CACHE_TTL.avatar,
+      'Failed to fetch full user avatars'
     );
-
-    if (!response.ok) {
-      throw new Error('Failed to fetch user avatars');
-    }
-
-    return response.json();
   },
-  
+
   async getMyProfile(): Promise<UserProfile> {
     const key = CACHE_KEYS.MY_PROFILE(
       CacheService.userId()
@@ -637,6 +668,34 @@ export const ApiService = {
       'Failed to fetch profile'
     );
   },
+
+  async getMyAvatar(): Promise<{
+  _id: string;
+  avatarUrl?: string;
+}> {
+  const key = CACHE_KEYS.MY_AVATAR(CacheService.userId());
+
+  return getCachedOrFetch(
+    key,
+    `${API_BASE}/users/me/avatar`,
+    CACHE_TTL.avatar,
+    'Failed to fetch avatar'
+  );
+},
+
+async getMyAvatarPlaceholder(): Promise<{
+  _id: string;
+  avatarPlaceholderUrl?: string;
+}> {
+  const key = `${CACHE_KEYS.MY_AVATAR(CacheService.userId())}:placeholder`;
+
+  return getCachedOrFetch(
+    key,
+    `${API_BASE}/users/me/avatar/placeholder`,
+    CACHE_TTL.avatar,
+    'Failed to fetch avatar placeholder'
+  );
+},
 
   async updateMyProfile(updates: Partial<UserProfile>): Promise<UserProfile> {
     const response = await authFetch(`${API_BASE}/users/me`, {

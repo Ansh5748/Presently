@@ -175,6 +175,7 @@ export interface UserProfile {
   statusText?: string;
   about?: string;
   avatarUrl?: string;
+  avatarPlaceholderUrl?: string;
   createdAt?: string;
   updatedAt?: string;
   isLocalComputeEnabled?: boolean;

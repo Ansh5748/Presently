@@ -113,132 +113,279 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
     }
   };
 
-  const loadDMs = useCallback(async () => {
+      const hydrateAvatars = useCallback((userIds: string[]) => {
+    const ids = [
+      ...new Set(
+        userIds
+          .map(id => id?.toString())
+          .filter(Boolean)
+      )
+    ];
+
+    if (!ids.length) return;
+
+    void (async () => {
+      try {
+        // ----------------------------------------------------------
+        // FIRST: tiny placeholder avatar.
+        // This is the fast/critical-path image.
+        // ----------------------------------------------------------
+        const avatars =
+          await ApiService.getUserAvatars(ids);
+
+        const avatarMap = new Map(
+          avatars.map(user => [
+            user._id.toString(),
+            user.avatarUrl || ''
+          ])
+        );
+
+        setDmUsers(prev =>
+          prev.map(user => {
+            const avatarUrl =
+              avatarMap.get(user._id);
+
+            return avatarUrl !== undefined
+              ? { ...user, avatarUrl }
+              : user;
+          })
+        );
+
+        // ----------------------------------------------------------
+        // SECOND: full clear avatar.
+        // Completely background.
+        // ----------------------------------------------------------
+        setDmUsers(prev =>
+          prev.map(user => {
+            const avatarUrl =
+              avatarMap.get(user._id);
+
+            return avatarUrl !== undefined
+              ? { ...user, avatarUrl }
+              : user;
+          })
+        );
+      } catch (error) {
+        console.error(
+          '[GroupsChat] Placeholder avatar refresh failed:',
+          error
+        );
+      }
+    })();
+  }, []);
+
+    const loadDMs = useCallback(async () => {
     const selfUser: DMUser = {
       _id: currentUserId,
-      name: profile?.name || currentUserName,
-      email: profile?.email || currentUserEmail,
+      name: currentUserName || 'You',
+      email: currentUserEmail || '',
       avatarUrl: getSelfAvatar()
     };
 
-    try {
-      // Build the initial DM directory from users already present
-      // in the groups we have already fetched.
-      const usersMap = new Map<string, DMUser>();
+    // ------------------------------------------------------------
+    // STEP 1: Build the DM directory entirely from local group data.
+    // This MUST NOT wait for /contacts or /me.
+    // ------------------------------------------------------------
+    const usersMap = new Map<string, DMUser>();
 
-      for (const group of groups) {
-        for (const member of group.members || []) {
-          const userObj =
-            typeof (member as any).userId === 'object'
-              ? (member as any).userId
-              : null;
+    for (const group of groups) {
+      for (const member of group.members || []) {
+        const userObj =
+          typeof (member as any).userId === 'object'
+            ? (member as any).userId
+            : null;
 
-          const userId = (
-            userObj?._id ||
-            (member as any).userId
-          )?.toString?.();
+        const userId = (
+          userObj?._id ||
+          (member as any).userId
+        )?.toString?.();
 
-          if (!userId || userId === currentUserId) continue;
+        if (!userId || userId === currentUserId) continue;
 
-          const name =
-            userObj?.name ||
-            (member as any).name ||
-            '';
+        const name =
+          userObj?.name ||
+          (member as any).name ||
+          '';
 
-          const email =
-            userObj?.email ||
-            (member as any).email ||
-            '';
+        const email =
+          userObj?.email ||
+          (member as any).email ||
+          '';
 
-          if (!name && !email) continue;
+        if (!name && !email) continue;
 
-          if (!usersMap.has(userId)) {
-            usersMap.set(userId, {
-              _id: userId,
-              name: name || 'User',
-              email,
-              // Group response may contain avatarUrl in some deployments.
-              // If it does not, avatar loading below will fill it.
-              avatarUrl: userObj?.avatarUrl || ''
-            });
-          }
+        if (!usersMap.has(userId)) {
+          usersMap.set(userId, {
+            _id: userId,
+            name: name || 'User',
+            email,
+            avatarUrl: userObj?.avatarUrl || ''
+          });
         }
       }
+    }
 
+    // ------------------------------------------------------------
+    // STEP 2: Render the sidebar immediately.
+    // Do NOT wait for direct-message contacts.
+    // ------------------------------------------------------------
+    setDmUsers([
+      selfUser,
+      ...Array.from(usersMap.values())
+    ]);
 
-      // Also fetch only people who have actually exchanged
-      // at least one personal DM with the current user.
+    // ------------------------------------------------------------
+    // STEP 3: Background refresh of people with existing DMs.
+    // This can add users who are not currently in a group.
+    // ------------------------------------------------------------
+    try {
       const directContacts = await ApiService.getDirectMessageContacts();
 
-      for (const user of directContacts) {
-        if (!user?._id || user._id === currentUserId) continue;
+      if (directContacts.length) {
+        setDmUsers(prev => {
+          const merged = new Map<string, DMUser>();
 
-        usersMap.set(user._id.toString(), {
-          _id: user._id.toString(),
-          name: user.name || 'User',
-          email: user.email || '',
-          avatarUrl: user.avatarUrl || ''
+          for (const user of prev) {
+            merged.set(user._id, user);
+          }
+
+          for (const user of directContacts) {
+            if (!user?._id || user._id === currentUserId) continue;
+
+            const existing = merged.get(user._id.toString());
+
+            merged.set(user._id.toString(), {
+              _id: user._id.toString(),
+              name: user.name || existing?.name || 'User',
+              email: user.email || existing?.email || '',
+              avatarUrl: user.avatarUrl || existing?.avatarUrl || '',
+              lastMessageAt: user.lastMessageAt
+            });
+          }
+
+          const self = merged.get(currentUserId) || selfUser;
+          merged.delete(currentUserId);
+
+          return [
+            self,
+            ...Array.from(merged.values())
+          ];
         });
       }
+    } catch (e) {
+      // Contacts are enhancement/background data.
+      // Never block the Chat UI if this request fails.
+      console.error(
+        '[GroupsChat] Background DM contacts refresh failed:',
+        e
+      );
+    }
 
-      const nextUsers: DMUser[] = [
-        selfUser,
-        ...Array.from(usersMap.values())
-      ];
+    // ------------------------------------------------------------
+    // STEP 4: Background avatar hydration.
+    // ------------------------------------------------------------
+    try {
+      const currentUsers = Array.from(usersMap.values());
 
-      setDmUsers(nextUsers);
+      const avatarIds = currentUsers
+        .filter(user => !user.avatarUrl)
+        .map(user => user._id);
 
-      // Load avatars for the group users without putting large
-      // avatar data back into the /groups response.
-      const avatarIds = nextUsers
-        .filter(u => u._id !== currentUserId && !u.avatarUrl)
-        .map(u => u._id);
+      if (!avatarIds.length) return;
 
-      if (avatarIds.length) {
-        try {
-          const avatars = await ApiService.getUserAvatars(avatarIds);
+      const avatars = await ApiService.getUserAvatars(avatarIds);
 
-          const avatarMap = new Map(
-            avatars.map(u => [
-              u._id.toString(),
-              u.avatarUrl || ''
+      void ApiService.getUserFullAvatars(avatarIds)
+        .then(fullAvatars => {
+          const fullAvatarMap = new Map(
+            fullAvatars.map(user => [
+              user._id.toString(),
+              user.avatarUrl || ''
             ])
           );
 
           setDmUsers(prev =>
             prev.map(user => {
-              const avatarUrl = avatarMap.get(user._id);
+              const avatarUrl = fullAvatarMap.get(user._id);
 
-              return avatarUrl !== undefined
+              return avatarUrl
                 ? { ...user, avatarUrl }
                 : user;
             })
           );
-        } catch (avatarError) {
-          console.error(
-            '[GroupsChat] Failed to load DM avatars:',
-            avatarError
-          );
-        }
-      }
+        })
+        .catch(() => {
+          // Keep the placeholder.
+        });
+
+          // Full avatar is background work.
+    void ApiService.getMyAvatar()
+      .then(avatar => {
+        const avatarUrl = avatar.avatarUrl || '';
+
+        if (!avatarUrl) return;
+
+        setProfile(prev =>
+          prev
+            ? { ...prev, avatarUrl }
+            : prev
+        );
+
+        setProfileDraft(prev => ({
+          ...prev,
+          avatarUrl
+        }));
+      })
+      .catch(() => {
+        // Keep cached/placeholder avatar.
+      });
+      const avatarMap = new Map(
+        avatars.map(user => [
+          user._id.toString(),
+          user.avatarUrl || ''
+        ])
+      );
+
+      setDmUsers(prev =>
+        prev.map(user => {
+          const avatarUrl = avatarMap.get(user._id);
+
+          return avatarUrl !== undefined
+            ? { ...user, avatarUrl }
+            : user;
+        })
+      );
     } catch (e) {
-      console.error('[GroupsChat] Failed to load DM users:', e);
-      setDmUsers([selfUser]);
+      console.error(
+        '[GroupsChat] Background avatar refresh failed:',
+        e
+      );
     }
   }, [
     groups,
     currentUserId,
     currentUserName,
-    currentUserEmail,
-    profile?.name,
-    profile?.email,
-    profile?.avatarUrl
+    currentUserEmail
   ]);
 
   const loadUserProfile = useCallback(async () => {
+    const cachedAvatar =
+      currentUserAvatar ||
+      getStoredUser().avatarUrl ||
+      '';
+
     try {
+      // ------------------------------------------------------------
+      // CRITICAL PATH:
+      // Only load lightweight profile data.
+      // ------------------------------------------------------------
       const p = await ApiService.getMyProfile();
-      setProfile(p);
+
+      setProfile({
+        ...p,
+        avatarUrl: cachedAvatar
+      });
+
       setProfileDraft({
         _id: p._id,
         name: p.name || '',
@@ -249,34 +396,96 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
         workingTimeEnd: p.workingTimeEnd || '',
         statusText: p.statusText || '',
         about: p.about || '',
-        avatarUrl: p.avatarUrl || '',
+        avatarUrl: cachedAvatar,
         createdAt: p.createdAt,
         updatedAt: p.updatedAt
       });
+
       try {
         const raw = localStorage.getItem('presently_user');
+
         if (raw) {
           const parsed = JSON.parse(raw);
+
           parsed.name = p.name || parsed.name;
-          parsed.avatarUrl = p.avatarUrl || '';
+          parsed.avatarUrl =
+            cachedAvatar ||
+            parsed.avatarUrl ||
+            currentUserAvatar ||
+            '';
+
           parsed.statusText = p.statusText || '';
-          localStorage.setItem('presently_user', JSON.stringify(parsed));
+
+          localStorage.setItem(
+            'presently_user',
+            JSON.stringify(parsed)
+          );
         }
       } catch {}
+
       setDmUsers(prev => {
         const rest = prev.filter(u => u._id !== p._id);
+
         const selfEntry: DMUser = {
           _id: p._id,
-          name: p.name || (prev.find(u => u._id === p._id)?.name) || currentUserName,
-          email: p.email || (prev.find(u => u._id === p._id)?.email) || currentUserEmail,
-          avatarUrl: p.avatarUrl || ''
+          name:
+            p.name ||
+            prev.find(u => u._id === p._id)?.name ||
+            currentUserName,
+          email:
+            p.email ||
+            prev.find(u => u._id === p._id)?.email ||
+            currentUserEmail,
+          avatarUrl: cachedAvatar
         };
+
         return [selfEntry, ...rest];
       });
+
+      // ------------------------------------------------------------
+      // BACKGROUND:
+      // Load tiny avatar immediately.
+      // Never block Chat UI.
+      // ------------------------------------------------------------
+      void ApiService.getMyAvatarPlaceholder()
+        .then(result => {
+          const avatarUrl =
+            result.avatarPlaceholderUrl || '';
+
+          if (!avatarUrl) return;
+
+          setProfile(prev =>
+            prev
+              ? { ...prev, avatarUrl }
+              : prev
+          );
+
+          setProfileDraft(prev => ({
+            ...prev,
+            avatarUrl
+          }));
+
+          setDmUsers(prev =>
+            prev.map(user =>
+              user._id === p._id
+                ? { ...user, avatarUrl }
+                : user
+            )
+          );
+        })
+        .catch(() => {
+          // Keep cached avatar.
+        });
+
     } catch (e) {
       console.error(e);
     }
-  }, [currentUserEmail, currentUserName]);
+  }, [
+    currentUserId,
+    currentUserAvatar,
+    currentUserEmail,
+    currentUserName
+  ]);
 
   useEffect(() => {
     if (initRef.current) return;
@@ -295,7 +504,7 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
         workingTimeEnd: cachedProfile.workingTimeEnd || '',
         statusText: cachedProfile.statusText || '',
         about: cachedProfile.about || '',
-        avatarUrl: cachedProfile.avatarUrl || '',
+        avatarUrl: cachedProfile.avatarUrl || currentUserAvatar || getStoredUser().avatarUrl || '',
         createdAt: cachedProfile.createdAt,
         updatedAt: cachedProfile.updatedAt
       });
@@ -307,14 +516,10 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
       setGroupsLoaded(true);
     }
 
-    const init = async () => {
-      await Promise.all([
-        loadUserProfile(),
-        loadGroups()
-      ]);
-    };
+    // Network refreshes are background work.
+    void loadUserProfile();
+    void loadGroups();
 
-    void init();
   }, [loadGroups, loadUserProfile]);
 
   useEffect(() => {
@@ -567,6 +772,12 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
     setShowProfile(true);
     setProfileEditing(false);
     setProfileLoading(true);
+
+    const cachedAvatar =
+      profile?.avatarUrl ||
+      currentUserAvatar ||
+      getStoredUser().avatarUrl ||
+      '';
     try {
       const p = await ApiService.getMyProfile();
       setProfile(p);
@@ -580,14 +791,35 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
         workingTimeEnd: p.workingTimeEnd || '',
         statusText: p.statusText || '',
         about: p.about || '',
-        avatarUrl: p.avatarUrl || '',
+        avatarUrl: cachedAvatar,
         createdAt: p.createdAt,
         updatedAt: p.updatedAt
+      });
+      // Full avatar is background work.
+    void ApiService.getMyAvatar()
+      .then(avatar => {
+        const avatarUrl = avatar.avatarUrl || '';
+
+        if (!avatarUrl) return;
+
+        setProfile(prev =>
+          prev
+            ? { ...prev, avatarUrl }
+            : prev
+        );
+
+        setProfileDraft(prev => ({
+          ...prev,
+          avatarUrl
+        }));
+      })
+      .catch(() => {
+        // Keep cached/placeholder avatar.
       });
     } catch (e) {
       const fallback: UserProfile = { _id: currentUserId, name: currentUserName, email: currentUserEmail };
       setProfile(fallback);
-      setProfileDraft({ ...fallback });
+      setProfileDraft({ ...fallback,avatarUrl: cachedAvatar });
       console.error(e);
     } finally {
       setProfileLoading(false);
@@ -612,7 +844,8 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
         workingTimeEnd: (profileDraft.workingTimeEnd || '').toString(),
         statusText: (profileDraft.statusText || '').toString(),
         about: (profileDraft.about || '').toString(),
-        avatarUrl: (profileDraft.avatarUrl || '').toString()
+        avatarUrl: (profileDraft.avatarUrl || '').toString(),
+        avatarPlaceholderUrl: (profileDraft.avatarPlaceholderUrl || '').toString()
       });
       setProfile(updated);
       setProfileDraft({
@@ -627,6 +860,7 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
         about: updated.about || '',
         avatarUrl: updated.avatarUrl || '',
         createdAt: updated.createdAt,
+        avatarPlaceholderUrl: updated.avatarPlaceholderUrl || '',
         updatedAt: updated.updatedAt
       });
       setProfileEditing(false);
@@ -700,18 +934,74 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
   };
 
   const handleAvatarUpload = async (
-        e: React.ChangeEvent<HTMLInputElement>
-    ) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = () => {
-          const result = reader.result;
-          if (typeof result !== 'string') return;
-          setProfileDraft(prev => ({ ...prev, avatarUrl: result }));
-        };
-        reader.readAsDataURL(file);
-    };
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const imageUrl = URL.createObjectURL(file);
+      const image = new Image();
+
+      await new Promise<void>((resolve, reject) => {
+        image.onload = () => resolve();
+        image.onerror = reject;
+        image.src = imageUrl;
+      });
+
+      const createAvatar = (
+        size: number,
+        quality: number
+      ): string => {
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return '';
+
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+
+        const sourceSize = Math.min(image.width, image.height);
+
+        const sx = (image.width - sourceSize) / 2;
+        const sy = (image.height - sourceSize) / 2;
+
+        ctx.drawImage(
+          image,
+          sx,
+          sy,
+          sourceSize,
+          sourceSize,
+          0,
+          0,
+          size,
+          size
+        );
+
+        return canvas.toDataURL('image/jpeg', quality);
+      };
+
+      // Tiny image used immediately throughout the app.
+      const placeholderUrl = createAvatar(32, 0.45);
+
+      // Clear image used after background hydration.
+      const avatarUrl = createAvatar(512, 0.82);
+
+      URL.revokeObjectURL(imageUrl);
+
+      setProfileDraft(prev => ({
+        ...prev,
+        avatarUrl,
+        avatarPlaceholderUrl: placeholderUrl
+      }));
+    } catch (error) {
+      console.error('[Avatar] Failed to process image:', error);
+    } finally {
+      e.target.value = '';
+    }
+  };  
 
   return (
     <>
@@ -904,8 +1194,8 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
           onClick={openProfile}
           className="w-full flex items-center gap-2 hover:bg-slate-700 rounded-lg p-2 transition"
           >
-          {profile?.avatarUrl || currentUserAvatar ? (
-            <img src={profile?.avatarUrl || currentUserAvatar} alt={currentUserName} className="w-8 h-8 rounded-full object-cover" />
+          {profile?.avatarUrl || currentUserAvatar || getStoredUser().avatarUrl ? (
+            <img src={profile?.avatarUrl || currentUserAvatar || getStoredUser().avatarUrl} alt={currentUserName} className="w-8 h-8 rounded-full object-cover" />
           ) : (
             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 text-white text-sm font-semibold flex items-center justify-center">
               {(profileDraft.name || currentUserName).charAt(0).toUpperCase()}
