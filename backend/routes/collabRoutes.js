@@ -120,10 +120,6 @@ app.get('/projects', authenticateToken, async (req, res) => {
               $ifNull: ['$pages', []]
             }
           },
-
-          coverImageUrl: {
-            $arrayElemAt: ['$pages.imageUrl', 0]
-          }
         }
       }
     ]);
@@ -134,6 +130,82 @@ app.get('/projects', authenticateToken, async (req, res) => {
       '[Get Projects Summary] Error:',
       error
     );
+
+    res.status(500).json({
+      error: 'Server error'
+    });
+  }
+});
+
+// ==================== GET /projects/previews - BACKGROUND PREVIEWS ====================
+
+app.get('/projects/previews', authenticateToken, async (req, res) => {
+  try {
+    const rawIds = (req.query.ids || '').toString();
+
+    if (!rawIds.trim()) {
+      return res.json([]);
+    }
+
+    const ids = [
+      ...new Set(
+        rawIds
+          .split(',')
+          .map(id => id.trim())
+          .filter(Boolean)
+      )
+    ];
+
+    if (!ids.length) {
+      return res.json([]);
+    }
+
+    const userId = req.user.id;
+    const userObjId = new mongoose.Types.ObjectId(userId);
+
+    // Only return projects the current user can access.
+    const userGroups = await Group.find({
+      $or: [
+        { 'members.userId': userObjId },
+        { createdBy: userObjId }
+      ]
+    })
+      .select('_id')
+      .lean();
+
+    const groupIds = userGroups.map(group => group._id);
+
+    const previews = await Project.aggregate([
+      {
+        $match: {
+          id: { $in: ids },
+          $or: [
+            { userId: userObjId },
+            { groupId: { $in: groupIds } },
+            { groupIds: { $in: groupIds } },
+            { assignedUserIds: userObjId }
+          ]
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          id: 1,
+          coverImageUrl: {
+            $arrayElemAt: ['$pages.imageUrl', 0]
+          }
+        }
+      }
+    ]);
+
+    res.set(
+      'Cache-Control',
+      'private, max-age=300, stale-while-revalidate=600'
+    );
+
+    res.json(previews);
+  } catch (error) {
+    console.error('[Get Project Previews] Error:', error);
 
     res.status(500).json({
       error: 'Server error'

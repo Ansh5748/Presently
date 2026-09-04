@@ -31,7 +31,7 @@ Presently is a freelance delivery + collaboration platform for presenting websit
 - **Framework**: React 19 + TypeScript + Vite
 - **Styling**: TailwindCSS via CDN (`index.html`) + Vanilla CSS
 - **Icons**: `lucide-react`
-- **Client-Side Compression**: Custom width-only canvas scaling + `base64ToBlob` binary converter
+- **Client-Side Compression**: Custom canvas-based image scaling + `base64ToBlob` binary converter; user avatars additionally generate dedicated 32×32 placeholder and 512×512 full-resolution variants.
 - **Router**: Custom lightweight state router in `App.tsx` (`history.pushState`)
 
 ### Real Chrome Extension (Primary Capture System)
@@ -71,20 +71,94 @@ Presently is a freelance delivery + collaboration platform for presenting websit
   - `DeliveryView.tsx`: Client-facing live delivery screen.
   - `LiveCaptureModal.tsx`: Real Chrome capture modal with animated URL bar, progress indicator, Stop & Stitch button, and chunk reassembly.
   - `GroupManagementModal.tsx`: Group/subgroup CRUD, role protection, project assignment/unassignment based on role/PM designation, navigation to DMs.
-  - `GroupsChatView.tsx`: Slack-like channels, DMs, visibility toggle ("all" vs "team only"), User Profile & Avatar reload sync (`getMyProfile()`).
+  - `GroupsChatView.tsx`: Slack-like channels, DMs, visibility toggle ("all" vs "team only"), cached user profile/avatar sync, progressive avatar loading, and background avatar hydration for DM users.
   - `AnnotationIssueModal.tsx`: Pin-based issue tracking modal with assignee timeline history.
   - `SubscriptionModal.tsx`: Plan selection, coupon codes, Razorpay/manual checkout.
 
 ### Services (`services/`)
-- `apiService.ts`: Central API wrapper handling JWT headers.
+- `apiService.ts`: Central API wrapper handling JWT headers, API response caching, stale-while-revalidate behavior, request deduplication, user profile caching, and progressive avatar caching.
+
+### API Cache Architecture
+
+`apiService.ts` uses a shared cache-first / stale-while-revalidate strategy for frequently accessed private API data.
+
+#### Cache Behavior
+
+- Fresh cached data is returned immediately without a network request.
+- Stale cached data is returned immediately while a background refresh runs.
+- Requests without cached data wait for the first API response.
+- Identical simultaneous requests are deduplicated through an in-flight request map.
+
+#### Avatar Cache
+
+Avatar data uses a 30-day frontend cache TTL.
+
+Separate cache keys are used for:
+
+- Current user's avatar.
+- Current user's placeholder avatar.
+- Other users' placeholder avatars.
+- Other users' full avatars.
+
+User ID lists are deduplicated and sorted before generating batch avatar cache keys so the same set of users produces the same cache entry regardless of input order.
+
 - `screenshotService.ts`: Legacy screenshot URL generator (Puppeteer fetch commented out).
 - `geminiService.ts`: AI copy rewrite and structure scanner.
 - `storageService.ts`: Legacy localStorage DB helper for user persistence.
 
 ### Backend (`backend/`)
 - `backend/server.js`: Express server entry (auth, subscription, CORS proxy-view; Puppeteer `/take` commented out).
-- `backend/routes/collabRoutes.js`: Collaboration routes (groups/chat/issues + project/pin endpoints).
+- `backend/routes/collabRoutes.js`: Collaboration routes (groups/chat/issues + project/pin endpoints), lightweight user profile endpoint, progressive avatar endpoints, and user avatar batch hydration.
+
+### User Avatar API Endpoints
+
+The backend separates lightweight profile/avatar requests from large avatar payloads.
+
+- `GET /users/me`
+  - Returns lightweight user profile data.
+  - Does not include the large `avatarUrl`.
+
+- `GET /users/me/avatar`
+  - Returns the current user's clear/full avatar.
+
+- `GET /users/me/avatar/placeholder`
+  - Returns the current user's tiny placeholder avatar.
+
+- `GET /users/avatars?ids=...`
+  - Batch endpoint returning placeholder avatars for multiple users.
+
+- `GET /users/avatars/full?ids=...`
+  - Batch endpoint returning clear/full avatars for multiple users.
+
+Avatar endpoints use private HTTP caching headers with long-lived caching for avatar resources.
+
+The full-avatar endpoints remain available for high-quality rendering but are intentionally used as background work rather than blocking the initial ChatView.
+
 - `backend/models/`: Mongoose schemas (`User`, `Project`, `Pin`, `Subscription`, `Group`, `Message`, `AnnotationIssue`, `AnnotationMessage`).
+
+### User Avatar Storage
+
+The `User` model stores two avatar representations:
+
+- `avatarUrl`: Clear 512×512 avatar image.
+- `avatarPlaceholderUrl`: Small 32×32 placeholder avatar.
+
+The placeholder is intentionally stored separately so normal ChatView avatar requests do not need to transfer the large full-resolution base64 image.
+
+### Avatar Performance Principle
+
+Large base64 image payloads must not be placed on the critical path of ChatView initialization.
+
+ChatView should render from cached/lightweight data first and progressively hydrate image quality in the background.
+
+The application therefore separates:
+
+- UI-critical metadata.
+- Tiny placeholder image data.
+- Large clear avatar data.
+
+This architecture preserves existing avatar functionality while preventing large MongoDB/base64 payloads from delaying normal ChatView interactions.
+
 - `backend/services/emailService.js`: Email sending service.
 
 ---
@@ -118,7 +192,60 @@ Presently is a freelance delivery + collaboration platform for presenting websit
 - **GroupsChatView**:
   - Slack-style group channels + direct messages.
   - Message visibility: "All Members" vs "Team Only".
-  - **User Profile & Avatar Reload Sync**: Automatically calls `getMyProfile()` on mount to maintain custom profile avatar image and status text (`statusText || 'DND'`) across page reloads.
+  - **User Profile & Avatar Reload Sync**: Automatically loads lightweight profile data on mount and hydrates the user's avatar in the background. Avatar loading is progressive: cached avatar → tiny placeholder avatar → clear/full avatar, without blocking ChatView rendering.
+
+### 4.4.1 User Avatar Performance Architecture
+
+Presently uses a progressive avatar-loading architecture so large base64 avatar images never block the initial ChatView render.
+
+#### Avatar Versions
+
+Each user avatar has two representations:
+
+- `avatarPlaceholderUrl`: Tiny 32×32 JPEG used for fast UI rendering.
+- `avatarUrl`: Clear 512×512 JPEG used after background hydration or when a high-quality avatar is specifically required.
+
+When a user uploads an avatar, `GroupsChatView.tsx` generates both versions client-side using Canvas before saving:
+
+- 32×32 at JPEG quality `0.45` for the placeholder.
+- 512×512 at JPEG quality `0.82` for the full avatar.
+
+#### Progressive Loading
+
+ChatView loads avatars in this order:
+
+1. Existing cached/local avatar.
+2. Tiny placeholder avatar.
+3. Clear/full avatar in the background.
+
+The full avatar request must never block the initial ChatView render.
+
+#### Current User
+
+The current user's profile is loaded independently:
+
+- `/users/me` returns lightweight profile information without the large `avatarUrl`.
+- `/users/me/avatar/placeholder` returns the tiny placeholder avatar.
+- `/users/me/avatar` loads the clear avatar in background after ChatView initialization.
+
+Opening the Profile panel does not initiate a new full-avatar request when the avatar has already been hydrated/cached.
+
+#### Other Users
+
+Other users are hydrated through:
+
+- `/users/avatars` → placeholder avatars.
+- `/users/avatars/full` → clear/full avatars in the background.
+
+This allows the sidebar to display small avatars quickly while clear avatars continue loading independently.
+
+#### Avatar Caching
+
+Avatar API responses use a long-lived 30-day client cache with background refresh behavior.
+
+Frontend avatar cache keys are user-specific and ID-order normalized so equivalent avatar batches reuse the same cached result.
+
+The frontend also deduplicates simultaneous requests through the shared in-flight request map.
 
 ### 4.5 Annotation Issue Modal (`AnnotationIssueModal.tsx`)
 - **View vs Edit Toggle**: Status and Assignee displayed in static badge view mode with an edit toggle (`Pencil`).
@@ -129,6 +256,30 @@ Presently is a freelance delivery + collaboration platform for presenting websit
 - **Trash Icon Pin Deletion**: One-click deletion of pin and issue thread.
 
 ---
+
+## 4.5 User Avatar Image Processing
+
+User avatar uploads are processed entirely client-side before being sent to the backend.
+
+### Avatar Generation
+
+The original uploaded image is cropped to a centered square and rendered through an HTML5 Canvas.
+
+Two JPEG versions are generated:
+
+- Placeholder: `32×32`, quality `0.45`
+- Full avatar: `512×512`, quality `0.82`
+
+Both are stored with the user profile.
+
+### Performance Goal
+
+The 32×32 placeholder is used for fast rendering throughout the application.
+
+The 512×512 version is only requested/used when a clear avatar is required and is loaded asynchronously in the background.
+
+This prevents large base64 avatar payloads from becoming part of the critical ChatView loading path.
+
 
 ## 5) Real Chrome Extension Architecture & Storage Pipeline
 
@@ -199,3 +350,4 @@ If backend console outputs:
 
 - **Puppeteer `/take` Endpoint**: Server-side Puppeteer screenshot code in `backend/server.js` and `services/screenshotService.ts` has been commented out using `//` line comments. Do NOT uncomment unless legacy server-side capture is explicitly requested.
 - **Independent Extension**: Extension handles real Chrome capture independently without relying on Puppeteer or server resources.
+

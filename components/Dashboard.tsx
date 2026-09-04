@@ -27,6 +27,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
   const safeLower = (v?: string) => (v || '').toLowerCase();
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(true);
+  const [projectPreviews, setProjectPreviews] = useState<Record<string, string>>({});
   const [groups, setGroups] = useState<Group[]>([]);
   const [isCreating, setIsCreating] = useState(false);
   const [newProjectData, setNewProjectData] = useState<{ name: string; websiteUrl: string; clientName: string; groupId: string; mode: ProjectMode }>({ name: '', websiteUrl: '', clientName: '', groupId: 'none', mode: 'present' });
@@ -87,15 +88,61 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
   const loadProjects = async () => {
     try {
       setProjectsLoading(true);
+
       const projectsData = await ApiService.getProjects();
+
+      // Project metadata is the critical path.
+      // Render the complete cards immediately without waiting for images.
       setProjects(projectsData);
+      setProjectsLoading(false);
+
+      // Preview images are intentionally background work.
+      const projectIds = projectsData
+        .map(project => project.id)
+        .filter(Boolean);
+
+      if (!projectIds.length) return;
+
+      void ApiService.getProjectPreviews(projectIds)
+        .then(previews => {
+          const previewMap: Record<string, string> = {};
+
+          previews.forEach(preview => {
+            if (preview.id && preview.coverImageUrl) {
+              previewMap[preview.id] = preview.coverImageUrl;
+            }
+          });
+
+          setProjectPreviews(previewMap);
+        })
+        .catch(error => {
+          console.error(
+            '[Dashboard] Failed to load project previews:',
+            error
+          );
+        });
+
     } catch (error) {
-      if ((error as any).status === 401 || (error as any).status === 403 || ((error as any).response && ((error as any).response.status === 401 || (error as any).response.status === 403))) {
+      if (
+        (error as any).status === 401 ||
+        (error as any).status === 403 ||
+        (
+          (error as any).response &&
+          (
+            (error as any).response.status === 401 ||
+            (error as any).response.status === 403
+          )
+        )
+      ) {
         StorageService.clearUser();
         onNavigate('/');
         return;
       }
-      console.error('[Dashboard] Failed to load projects:', error);
+
+      console.error(
+        '[Dashboard] Failed to load projects:',
+        error
+      );
     } finally {
       setProjectsLoading(false);
     }
@@ -706,7 +753,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
             {filteredProjects.map(project => {
-              const coverImage = project.coverImageUrl;
+              const coverImage = projectPreviews[project.id];
               const pageCount = project.pageCount;
               const isWorking = project.mode === 'working';
               const isPublished = project.status === ProjectStatus.PUBLISHED;
@@ -720,14 +767,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
                   {/* Image Preview Banner */}
                   <div className="h-48 bg-slate-100/80 overflow-hidden relative border-b border-slate-100">
                     {coverImage ? (
-                      <img 
-                        src={coverImage} 
-                        alt={project.name} 
-                        className="w-full h-full object-cover object-top opacity-95 group-hover:scale-105 transition-transform duration-500" 
+                      <img
+                        src={coverImage}
+                        alt={project.name}
+                        className="w-full h-full object-cover object-top opacity-95 group-hover:scale-105 transition-transform duration-500"
                       />
                     ) : (
-                      <div className="flex items-center justify-center h-full text-slate-400 text-xs font-medium">
-                        No Preview Image
+                      <div
+                        className="absolute inset-0 overflow-hidden bg-slate-100"
+                        aria-hidden="true"
+                      >
+                        <div
+                          className="presently-shimmer"
+                          aria-hidden="true"
+                        />
                       </div>
                     )}
                     

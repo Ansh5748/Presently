@@ -304,6 +304,30 @@ export const ApiService = {
     );
   },
 
+  async getProjectPreviews(
+  projectIds: string[]
+): Promise<Array<{
+  id: string;
+  coverImageUrl?: string | null;
+}>> {
+  const ids = [
+    ...new Set(
+      projectIds
+        .map(id => id?.toString())
+        .filter(Boolean)
+    )
+  ].sort();
+
+  if (!ids.length) {
+    return [];
+  }
+
+  return fetchJson(
+    `${API_BASE}/projects/previews?ids=${encodeURIComponent(ids.join(','))}`,
+    'Failed to fetch project previews'
+  );
+},
+
   async createProject(data: Record<string, unknown>): Promise<Project> {
     const response = await authFetch(`${API_BASE}/projects`, {
       method: 'POST',

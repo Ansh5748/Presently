@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { X, Plus, Users, Building2, Crown, Shield, UserMinus, Hash, Trash2, Send, Search, MoreVertical, Pencil, Save, ChevronLeft, Loader2 } from 'lucide-react';
 import { ApiService } from '../services/apiService';
-import type { Group, GroupMember, Subgroup, GroupType, MemberRole, UserSearchResult, Project } from '../types';
+import type { Group, GroupMember, Subgroup, GroupType, MemberRole, UserSearchResult, ProjectSummary } from '../types';
 
 type TabType = 'create' | 'manage';
 type ManageSub = 'info' | 'members' | 'subgroups' | 'projects';
@@ -22,8 +22,9 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({ isOp
   const [tab, setTab] = useState<TabType>('create');
   const [groups, setGroups] = useState<Group[]>([]);
   const [groupsLoading, setGroupsLoading] = useState(false);
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
+  const [projectPreviews, setProjectPreviews] = useState<Record<string, string>>({});
   const [assigningProjectId, setAssigningProjectId] = useState<string | null>(null);
   const [manageView, setManageView] = useState<ManageView | null>(null);
   const [showMobileGroupList, setShowMobileGroupList] = useState(!lockToGroup);
@@ -99,16 +100,41 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({ isOp
 
   const loadProjects = useCallback(async () => {
     try {
-      // Read cached projects for instant UI, then refresh
-      const cached = ApiService.getCachedProjects && ApiService.getCachedProjects();
-      if (cached && cached.length) {
-        setProjects(cached);
-        setProjectsLoading(false);
-      } else {
-        setProjectsLoading(true);
-      }
+      setProjectsLoading(true);
+
       const data = await ApiService.getProjects();
+
+      // Project metadata is the critical path.
+      // Render the project cards immediately.
       setProjects(data);
+      setProjectsLoading(false);
+
+      const projectIds = data
+        .map(project => project.id)
+        .filter(Boolean);
+
+      if (!projectIds.length) return;
+
+      // Preview images are background work.
+      void ApiService.getProjectPreviews(projectIds)
+        .then(previews => {
+          const previewMap: Record<string, string> = {};
+
+          previews.forEach(preview => {
+            if (preview.id && preview.coverImageUrl) {
+              previewMap[preview.id] = preview.coverImageUrl;
+            }
+          });
+
+          setProjectPreviews(previewMap);
+        })
+        .catch(error => {
+          console.error(
+            '[GroupManagementModal] Failed to load project previews:',
+            error
+          );
+        });
+
     } catch (e) {
       console.error(e);
       setProjects([]);
@@ -499,6 +525,7 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({ isOp
                     getMemberRoleIcon={getMemberRoleIcon}
                     projects={projects}
                     projectsLoading={projectsLoading}
+                    projectPreviews={projectPreviews}
                     assigningProjectId={assigningProjectId}
                   />
                 )}
@@ -546,8 +573,9 @@ interface GroupDetailViewProps {
   handleUnassignProjectFromGroup: (groupId: string, projectId: string) => Promise<void>;
   handleDeleteGroup: (groupId: string) => void;
   getMemberRoleIcon: (r?: MemberRole) => React.ReactNode;
-  projects: Project[];
+  projects: ProjectSummary[];
   projectsLoading: boolean;
+  projectPreviews: Record<string, string>;
   assigningProjectId: string | null;
 }
 
@@ -849,7 +877,7 @@ const GroupDetailView: React.FC<GroupDetailViewProps> = (props) => {
                         ) : (
                           projectResults.map(p => {
                             const isAssigned = uniqueProjectIds.includes(p.id);
-                            const pageCount = p.pages?.length || 0;
+                            const pageCount = p.pageCount || 0;
                             return (
                               <button
                                 key={p.id}
@@ -900,8 +928,8 @@ const GroupDetailView: React.FC<GroupDetailViewProps> = (props) => {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {assignedProjects.map(project => {
-                  const coverImage = project.pages?.[0]?.imageUrl;
-                  const pageCount = project.pages?.length || 0;
+                  const coverImage = props.projectPreviews[project.id];
+                  const pageCount = project.pageCount || 0;
                   const menuOpen = activeProjectMenuId === project.id;
                   return (
                     <div
@@ -911,10 +939,22 @@ const GroupDetailView: React.FC<GroupDetailViewProps> = (props) => {
                     >
                       <div className="h-32 bg-slate-100 overflow-hidden relative">
                         {coverImage ? (
-                          <img src={coverImage} alt={project.name} className="w-full h-full object-cover object-top opacity-90 group-hover:opacity-100 transition-opacity" />
+                          <img
+                            src={coverImage}
+                            alt={project.name}
+                            className="w-full h-full object-cover object-top opacity-90 group-hover:opacity-100 transition-opacity"
+                          />
                         ) : (
-                          <div className="flex items-center justify-center h-full text-slate-400 text-sm">No Image</div>
-                        )}
+                          <div
+                            className="absolute inset-0 overflow-hidden bg-slate-100"
+                            aria-hidden="true"
+                          >
+                            <div
+                              className="presently-shimmer"
+                              aria-hidden="true"
+                            />
+                          </div>
+                        )}  
                         <div className="absolute top-2 right-2 flex gap-1">
                           {canManageProjects && (
                             <button
