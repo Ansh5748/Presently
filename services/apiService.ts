@@ -1154,13 +1154,36 @@ async getMyAvatarPlaceholder(): Promise<{
   },
 
   async getPinIssue(
-    pinId: string
+    pinId: string,
+    projectId?: string
   ): Promise<AnnotationIssue | null> {
     const key = CACHE_KEYS.PIN_ISSUE(
       CacheService.userId(),
       pinId
     );
+    if (projectId) {
+      const projectIssues =
+        getCacheData<AnnotationIssue[]>(
+          CACHE_KEYS.PROJECT_ISSUES(
+            CacheService.userId(),
+            projectId
+          )
+        );
 
+      const cachedProjectIssue =
+        projectIssues?.find(
+          issue => issue.pinId === pinId
+        );
+
+      if (cachedProjectIssue) {
+        CacheService.set(
+          key,
+          cachedProjectIssue
+        );
+
+        return cachedProjectIssue;
+      }
+    }
     const cached = getCacheEntry<AnnotationIssue | null>(key);
 
     if (cached) {
@@ -1231,10 +1254,37 @@ async getMyAvatarPlaceholder(): Promise<{
     }
 
     const result = (await response.json()) as AnnotationIssue;
-    CacheService.invalidate(CACHE_KEYS.PIN_ISSUE(CacheService.userId(), pinId));
+
+    const userId = CacheService.userId();
+
+    CacheService.set(
+      CACHE_KEYS.PIN_ISSUE(userId, pinId),
+      result
+    );
+
     if (result.projectId) {
-      CacheService.invalidate(CACHE_KEYS.PROJECT_ISSUES(CacheService.userId(), result.projectId));
+      const projectIssuesKey = CACHE_KEYS.PROJECT_ISSUES(
+        userId,
+        result.projectId
+      );
+
+      const cachedIssues =
+        getCacheData<AnnotationIssue[]>(projectIssuesKey);
+
+      if (cachedIssues) {
+        const nextIssues = cachedIssues.filter(
+          issue =>
+            issue.id !== result.id &&
+            issue.pinId !== result.pinId
+        );
+
+        CacheService.set(
+          projectIssuesKey,
+          [result, ...nextIssues]
+        );
+      }
     }
+
     return result;
   },
 
@@ -1320,6 +1370,12 @@ async getMyAvatarPlaceholder(): Promise<{
       }
 
       return data;
+    }
+
+    const cached = getCacheData<AnnotationMessage[]>(key);
+
+    if (cached) {
+      return cached.slice(0, safeLimit);
     }
 
     return getCachedOrFetch<AnnotationMessage[]>(

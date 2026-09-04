@@ -1452,20 +1452,25 @@ app.post('/projects/:projectId/pins', authenticateToken, async (req, res) => {
   try {
     const { projectId } = req.params;
     const { pageId, x, y, title, description, device, type } = req.body;
-    const userId = req.user.id;
 
-    // Verify project ownership (or group access)
-    let project = await Project.findOne({ id: projectId, userId });
-    if (!project) {
-      project = await Project.findOne({ id: projectId });
-    }
+    // Only fetch the tiny amount of project metadata needed here.
+    // NEVER load pages/imageUrl/Base64 for pin creation.
+    const [project, lastPin] = await Promise.all([
+      Project.findOne({ id: projectId })
+        .select('id')
+        .lean(),
+
+      Pin.findOne({ projectId })
+        .sort({ number: -1 })
+        .select('number')
+        .lean()
+    ]);
+
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    // Calculate next number
-    const projectPins = await Pin.find({ projectId });
-    const nextNumber = projectPins.length + 1;
+    const nextNumber = (lastPin?.number || 0) + 1;
 
     const pin = new Pin({
       id: generateId(),
@@ -1481,6 +1486,7 @@ app.post('/projects/:projectId/pins', authenticateToken, async (req, res) => {
     });
 
     await pin.save();
+
     res.status(201).json(pin);
 
   } catch (error) {

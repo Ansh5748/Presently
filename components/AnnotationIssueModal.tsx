@@ -131,21 +131,18 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
   }, [pin]);
 
   useEffect(() => {
-    if (isOpen && pin) {
-      setMobileAnnotationView('issue');
-      loadIssue();
-    } else {
-      setIssue(null);
-      setMessages([]);
-      setIsEditingAssigneeStatus(false);
-    }
-  }, [isOpen, pin]);
+  if (!isOpen || !pin) {
+    setIssue(null);
+    setMessages([]);
+    setIsEditingAssigneeStatus(false);
+    return;
+  }
 
-  useEffect(() => {
-    if (isOpen && pin) {
-      loadAssigneeOptions();
-    }
-  }, [isOpen, pin]);
+  setMobileAnnotationView('issue');
+
+  void loadIssue();
+  void loadAssigneeOptions();
+}, [isOpen, pin]);
 
   useEffect(() => {
     if (shouldScrollToBottomRef.current) {
@@ -267,7 +264,7 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
         setLoading(false);
       }
 
-      const existing = await ApiService.getPinIssue(pin.id);
+      const existing = await ApiService.getPinIssue(pin.id, project.id);
       if (existing) {
         const existingAssigneeId = existing.assigneeId
           ? (typeof existing.assigneeId === 'object'

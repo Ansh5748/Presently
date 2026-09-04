@@ -942,7 +942,9 @@ app.get('/projects/previews', authenticateToken, async (req, res) => {
     try {
       const { projectId } = req.params;
       const userId = req.user.id;
-      const project = await Project.findOne({ id: projectId }).lean();
+      const project = await Project.findOne({ id: projectId })
+        .select('id userId assignedUserIds groupId groupIds')
+        .lean();
       if (!project) return res.status(404).json({ error: 'Project not found' });
       const userObjId = new mongoose.Types.ObjectId(userId);
       const userIdStr = userId.toString();
@@ -1350,7 +1352,12 @@ app.get('/projects/previews', authenticateToken, async (req, res) => {
     try {
       const { projectId } = req.params;
       const userId = req.user.id;
-      const project = await Project.findOne({ id: projectId }).lean();
+      const project =
+        await Project.findOne({ id: projectId })
+          .select(
+            'id userId assignedUserIds groupId groupIds'
+          )
+          .lean();
       if (!project) return res.status(404).json({ error: 'Project not found' });
       const hasAccess = await checkProjectAccess(project, userId);
       if (!hasAccess) return res.status(403).json({ error: 'Access denied' });
@@ -1377,7 +1384,9 @@ app.get('/projects/previews', authenticateToken, async (req, res) => {
         .populate('assignmentHistory.toUserId', 'name email')
         .lean();
       if (!issue) return res.json(null);
-      const project = await Project.findOne({ id: issue.projectId }).lean();
+      const project = await Project.findOne({ id: issue.projectId })
+        .select('id userId assignedUserIds groupId groupIds')
+        .lean();
       if (!project) return res.json(null);
       const hasAccess = await checkProjectAccess(project, userId);
       if (!hasAccess) return res.status(403).json({ error: 'Access denied' });
@@ -1395,7 +1404,9 @@ app.get('/projects/previews', authenticateToken, async (req, res) => {
       const { projectId, assigneeId, status, labels } = req.body;
       let issue = await AnnotationIssue.findOne({ pinId });
       if (issue) {
-        const project = await Project.findOne({ id: issue.projectId });
+        const project = await Project.findOne({ id: issue.projectId })
+          .select('id userId assignedUserIds groupId groupIds')
+          .lean();
         if (!project) return res.status(404).json({ error: 'Project not found' });
 
         let canEdit = project.userId.toString() === userId;
@@ -1461,10 +1472,34 @@ app.get('/projects/previews', authenticateToken, async (req, res) => {
         ]);
         return res.json(populated);
       } else {
-        const pin = await Pin.findOne({ id: pinId });
-        if (!pin) return res.status(404).json({ error: 'Pin not found' });
-        const project = await Project.findOne({ id: projectId || pin.projectId });
-        if (!project) return res.status(404).json({ error: 'Project not found' });
+        const pinLookup = Pin.findOne({ id: pinId })
+  .select('id projectId')
+  .lean();
+
+    const projectLookup = Project.findOne({
+      id: projectId || pinId
+    })
+      .select('id')
+      .lean();
+
+    const [pin, requestedProject] = await Promise.all([
+      pinLookup,
+      projectLookup
+    ]);
+
+    if (!pin) {
+      return res.status(404).json({ error: 'Pin not found' });
+    }
+
+    const project = projectId
+      ? requestedProject
+      : await Project.findOne({ id: pin.projectId })
+          .select('id')
+          .lean();
+
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
         issue = new AnnotationIssue({
           id: generateId(), pinId: pin.id, projectId: project.id,
           assigneeId: assigneeId ? new mongoose.Types.ObjectId(assigneeId) : undefined,
@@ -1477,8 +1512,13 @@ app.get('/projects/previews', authenticateToken, async (req, res) => {
             at: new Date()
           }] : []
         });
-        await issue.save();
-        await Pin.findOneAndUpdate({ id: pinId }, { type: 'issue' });
+        await Promise.all([
+          issue.save(),
+          Pin.findOneAndUpdate(
+            { id: pinId },
+            { type: 'issue' }
+          )
+        ]);
 
         const populated = await issue.populate([
           { path: 'assigneeId', select: 'name email' },
@@ -1521,7 +1561,9 @@ app.get('/projects/previews', authenticateToken, async (req, res) => {
       if (!['active', 'in_progress', 'in_review', 'resolved'].includes(status)) {
         return res.status(400).json({ error: 'Invalid status' });
       }
-      const project = await Project.findOne({ id: issue.projectId });
+      const project = await Project.findOne({ id: issue.projectId })
+        .select('id userId assignedUserIds groupId groupIds')
+        .lean();
       if (!project) return res.status(404).json({ error: 'Project not found' });
       let canUpdate = project.userId.toString() === userId;
       if (!canUpdate && issue.assigneeId && issue.assigneeId.toString() === userId) canUpdate = true;
@@ -1575,7 +1617,9 @@ app.get('/projects/previews', authenticateToken, async (req, res) => {
       const issue = await AnnotationIssue.findOne({ id: issueId }).select('_id projectId').lean();
       if (!issue) return res.status(404).json({ error: 'Issue not found' });
 
-      const project = await Project.findOne({ id: issue.projectId }).lean();
+      const project = await Project.findOne({ id: issue.projectId })
+        .select('id userId assignedUserIds groupId groupIds')
+        .lean();
       if (!project) return res.status(404).json({ error: 'Project not found' });
 
       const hasAccess = await checkProjectAccess(project, userId);
@@ -1633,7 +1677,9 @@ app.get('/projects/previews', authenticateToken, async (req, res) => {
       if (!content) return res.status(400).json({ error: 'Content required' });
       const issue = await AnnotationIssue.findOne({ id: issueId }).select('_id projectId').lean();
       if (!issue) return res.status(404).json({ error: 'Issue not found' });
-      const project = await Project.findOne({ id: issue.projectId }).lean();
+      const project = await Project.findOne({ id: issue.projectId })
+        .select('id userId assignedUserIds groupId groupIds')
+        .lean();
       if (!project) return res.status(404).json({ error: 'Project not found' });
       const hasAccess = await checkProjectAccess(project, userId);
       if (!hasAccess) return res.status(403).json({ error: 'Access denied' });

@@ -1426,6 +1426,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
 
     try {
       let savedPin: Pin;
+      let savedIssue: AnnotationIssue | null = null;
       if (selectedPinId) {
         savedPin = await ApiService.updatePin(selectedPinId, {
           title: tempPin.title,
@@ -1446,24 +1447,54 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
 
       if (targetType === 'issue' && project.mode === 'working') {
         try {
-          await ApiService.savePinIssue(savedPin.id, { projectId: project.id, status: 'active' });
+          savedIssue = await ApiService.savePinIssue(
+            savedPin.id,
+            {
+              projectId: project.id,
+              status: 'active'
+            }
+          );
         } catch { }
       } else if (targetType === 'comment') {
         try {
           await ApiService.deletePinIssue(savedPin.id);
+
+          setProjectIssues(prev =>
+            prev.filter(issue => issue.pinId !== savedPin.id)
+          );
         } catch { }
       }
 
-      const updatedPins = await ApiService.getPins(project.id);
-      setPins(updatedPins);
-      await refreshProjectIssues(project.id);
+      setPins(prev => {
+        if (selectedPinId) {
+          return prev.map(pin =>
+            pin.id === savedPin.id
+              ? savedPin
+              : pin
+          );
+        }
+
+        return [...prev, savedPin];
+      });
+
+      if (savedIssue) {
+        setProjectIssues(prev => [
+          savedIssue!,
+          ...prev.filter(
+            issue => issue.pinId !== savedIssue!.pinId
+          )
+        ]);
+      }
+
       setTempPin(null);
       setSelectedPinId(null);
       setIsEditingPin(false);
 
-      if (targetType === 'issue' && project.mode === 'working') {
-        const finalSavedPin = updatedPins.find((p: Pin) => p.id === savedPin.id) || savedPin;
-        setIssueModalPin(finalSavedPin);
+      if (
+        targetType === 'issue' &&
+        project.mode === 'working'
+      ) {
+        setIssueModalPin(savedPin);
         setShowIssueModal(true);
       }
     } catch (error: any) {

@@ -74,8 +74,4 @@ annotationIssueSchema.index({
   createdAt: -1
 });
 
-annotationIssueSchema.index({
-  pinId: 1
-});
-
 module.exports = mongoose.model('AnnotationIssue', annotationIssueSchema);
