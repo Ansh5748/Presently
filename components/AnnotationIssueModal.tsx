@@ -107,6 +107,8 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
   const [pinDetailsSaving, setPinDetailsSaving] = useState(false);
   const [localPin, setLocalPin] = useState<Pin | null>(pin);
   const [mobileAnnotationView, setMobileAnnotationView] = useState<'issue' | 'discussion'>('issue');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [uiError, setUiError] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLDivElement>(null);
@@ -439,7 +441,7 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
         loadMessages(saved.id);
       }
     } catch (e: any) {
-      alert(e.message || 'Failed to save issue');
+      setUiError(e.message || 'Failed to save issue');
     } finally { setSaving(false); }
   };
 
@@ -449,7 +451,7 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
     const description = pinDraftDescription.trim();
 
     if (!title) {
-      alert('Annotation title is required');
+      setUiError('Annotation title is required');
       return;
     }
 
@@ -471,7 +473,7 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
       onPinUpdated?.(updatedPin);
       setEditingPinDetails(false);
     } catch (e: any) {
-      alert(e.message || 'Failed to update annotation');
+      setUiError(e.message || 'Failed to update annotation');
     } finally {
       setPinDetailsSaving(false);
     }
@@ -479,17 +481,21 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
 
   const handleDeleteCompletePin = async () => {
     if (!localPin) return;
-    if (!confirm('Are you sure you want to delete this pin and its issue?')) return;
+
+    setShowDeleteConfirm(false);
+
     try {
       await ApiService.deletePin(localPin.id);
+
       if (onDeletePin) {
         onDeletePin(localPin.id);
       } else {
         onPinUpdated?.(localPin);
       }
+
       onClose();
     } catch (e: any) {
-      alert(e.message || 'Failed to delete pin');
+      setUiError(e.message || 'Failed to delete pin');
     }
   };
 
@@ -503,7 +509,7 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
       setMessages(prev => [...prev, msg]);
       setMessageText('');
     } catch (e: any) {
-      alert(e.message || 'Failed to send');
+      setUiError(e.message || 'Failed to send');
     } finally { setSendingMsg(false); }
   };
 
@@ -732,7 +738,7 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
                       <Pencil className="w-4 h-4" />
                     </button>
                     <button
-                      onClick={handleDeleteCompletePin}
+                      onClick={() => setShowDeleteConfirm(true)}
                       className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-600 transition"
                       title="Delete pin and issue"
                     >
@@ -1314,6 +1320,46 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
         </div>
       </div>
 
+      {showDeleteConfirm && (
+            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm border border-slate-200 p-5">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-full bg-red-50 text-red-600 flex items-center justify-center flex-shrink-0">
+                    <Trash2 className="w-5 h-5" />
+                  </div>
+
+                  <div className="min-w-0">
+                    <h4 className="font-bold text-slate-800">
+                      Delete annotation?
+                    </h4>
+
+                    <p className="text-sm text-slate-500 mt-1 leading-relaxed">
+                      Are you sure you want to delete this pin and its issue?
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 mt-5">
+                  <button
+                    type="button"
+                    onClick={() => setShowDeleteConfirm(false)}
+                    className="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-sm font-medium transition"
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleDeleteCompletePin}
+                    className="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700 text-sm font-medium transition"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
       {/* Full Assignment History Modal */}
       {showHistoryModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 sm:p-4 backdrop-blur-sm">
@@ -1366,6 +1412,20 @@ export const AnnotationIssueModal: React.FC<AnnotationIssueModalProps> = ({
               </button>
             </div>
           </div>
+        </div>
+      )}
+      {uiError && (
+        <div className="mx-4 sm:mx-6 mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700 flex items-start justify-between gap-3">
+          <span>{uiError}</span>
+
+          <button
+            type="button"
+            onClick={() => setUiError(null)}
+            className="text-red-500 hover:text-red-700 flex-shrink-0"
+            aria-label="Dismiss error"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
     </div>

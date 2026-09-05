@@ -14,13 +14,29 @@ interface DeliveryViewProps {
 }
 
 export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveView = false, onNavigate }) => {
+  const normalizePinDevice = (device: any): 'desktop' | 'mobile' => {
+    const raw = String(device ?? '').trim().toLowerCase();
+    if (raw === 'mobile' || raw === 'android' || raw === 'ios' || raw === 'phone') {
+      return 'mobile';
+    }
+    return 'desktop';
+  };
+
   const [project, setProject] = useState<Project | null>(null);
   const [pins, setPins] = useState<Pin[]>([]);
   const [activePinId, setActivePinId] = useState<string | null>(null);
   const [activePageId, setActivePageId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [isEditingDetails, setIsEditingDetails] = useState(false);
-  const [viewMode, setViewMode] = useState<'desktop' | 'mobile'>('desktop');
+  const [viewMode, setViewMode] = useState<'desktop' | 'mobile'>(() => {
+    if (typeof window === 'undefined') return 'desktop';
+
+    if (isLiveView && window.matchMedia('(max-width: 768px)').matches) {
+      return 'mobile';
+    }
+
+    return 'desktop';
+  });
   const imageContainerRef = useRef<HTMLDivElement>(null);
 
   const [currentUserId, setCurrentUserId] = useState<string>('');
@@ -288,12 +304,36 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
   })();
 
   const canSeePin = (pin: Pin): boolean => {
-    if (isProjectOwnerOrAdminOrPMOrQA || canAssignFilterAssignees) return true;
+    // Published Live view must use the published snapshot directly.
+    // It must never depend on authenticated projectIssues data.
+    if (isLiveView) {
+      return true;
+    }
+
+    if (isProjectOwnerOrAdminOrPMOrQA || canAssignFilterAssignees) {
+      return true;
+    }
+
     const pinType = pin.type || 'issue';
-    if (pinType === 'comment') return true;
+
+    if (pinType === 'comment') {
+      return true;
+    }
+
     const iss = projectIssues.find(i => i.pinId === pin.id);
-    if (!iss) return false;
-    const assigneeId = iss.assigneeId ? (typeof iss.assigneeId === 'object' ? (iss.assigneeId as any)._id : iss.assigneeId) : '';
+
+    if (!iss) {
+      return false;
+    }
+
+    const assigneeId = iss.assigneeId
+      ? (
+          typeof iss.assigneeId === 'object'
+            ? (iss.assigneeId as any)._id
+            : iss.assigneeId
+        )
+      : '';
+
     return assigneeId?.toString() === currentUserId;
   };
 
@@ -325,7 +365,7 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
       list = list.filter(iss => {
         const pin = pins.find(p => p.id === iss.pinId);
         if (!pin) return false;
-        const dev = pin.device || 'desktop';
+        const dev = normalizePinDevice(pin.device);
         return dev === issueDeviceFilter;
       });
     }
@@ -422,7 +462,7 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
     if (targetPin.pageId && targetPin.pageId !== activePageId) {
       setActivePageId(targetPin.pageId);
     }
-    const pinDevice = (targetPin.device || 'desktop') as 'desktop' | 'mobile';
+    const pinDevice = normalizePinDevice(targetPin.device);
     if (pinDevice !== viewMode) {
       setViewMode(pinDevice);
     }
@@ -461,7 +501,7 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
         if (!(titleMatch || descMatch || numMatch)) return false;
       }
       if (issueDeviceFilter !== 'all') {
-        const dev = pin.device || 'desktop';
+        const dev = normalizePinDevice(pin.device);
         if (dev !== issueDeviceFilter) return false;
       }
       if (issueTypeFilter !== 'all' && issueTypeFilter !== 'comment') return false;
@@ -492,7 +532,11 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
   })();
 
   const activePage = project?.pages.find(p => p.id === activePageId);
-  const activePins = pins.filter(p => p.pageId === activePageId && (p.device === viewMode || (!p.device && viewMode === 'desktop')));
+  const activePins = pins.filter(pin => {
+    if (pin.pageId !== activePageId) return false;
+    const pinDevice = normalizePinDevice(pin.device);
+    return pinDevice === viewMode;
+  });
   const visiblePins = activePins.filter(canSeePin);
 
   const pageSlug = (activePage as any)?.originalUrl?.toLowerCase().replace(/\s/g, '-') || '';
@@ -673,8 +717,8 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
                           >
                             {pin.title}
                           </button>
-                          <span title={(pin.device || 'desktop') === 'mobile' ? 'Mobile' : 'Desktop'}>
-                            {(pin.device || 'desktop') === 'mobile' ? (
+                          <span title={normalizePinDevice(pin.device) === 'mobile' ? 'Mobile' : 'Desktop'}>
+                            {normalizePinDevice(pin.device) === 'mobile' ? (
                               <Smartphone size={11} className="text-purple-500" />
                             ) : (
                               <Monitor size={11} className="text-slate-400" />
@@ -759,7 +803,7 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
                           )}
                           <span className="font-bold text-base leading-tight flex-1">{pin.title}</span>
                           <div className="flex items-center gap-1 flex-shrink-0 ml-1">
-                            {(pin.device || 'desktop') === 'mobile' ? (
+                            {normalizePinDevice(pin.device) === 'mobile' ? (
                               <Smartphone size={12} className="text-purple-400" />
                             ) : (
                               <Monitor size={12} className="text-slate-300" />
@@ -921,7 +965,7 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
                   const pin = item.pin;
                   const page = project?.pages.find(p => p.id === pin?.pageId);
                   const pinType = pin?.type || 'issue';
-                  const pinDevice = pin?.device || 'desktop';
+                  const pinDevice = normalizePinDevice(pin?.device);
 
                   const isIssue = item.kind === 'issue';
                   const iss = isIssue ? item.issue : null;
@@ -951,7 +995,7 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
                     if (targetPin.pageId && targetPin.pageId !== activePageId) {
                       setActivePageId(targetPin.pageId);
                     }
-                    const device = (targetPin.device || 'desktop') as 'desktop' | 'mobile';
+                    const device = normalizePinDevice(targetPin.device);
                     if (device !== viewMode) {
                       setViewMode(device);
                     }

@@ -899,6 +899,14 @@ interface ProjectEditorProps {
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
 export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavigate }) => {
+  const normalizePinDevice = (device: any): 'desktop' | 'mobile' => {
+    const raw = String(device ?? '').trim().toLowerCase();
+    if (raw === 'mobile' || raw === 'android' || raw === 'ios' || raw === 'phone') {
+      return 'mobile';
+    }
+    return 'desktop';
+  };
+
   const [project, setProject] = useState<Project | null>(null);
   const [pins, setPins] = useState<Pin[]>([]);
   const [activePageId, setActivePageId] = useState<string | null>(null);
@@ -1049,7 +1057,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       list = list.filter(iss => {
         const pin = pins.find(p => p.id === iss.pinId);
         if (!pin) return false;
-        const dev = pin.device || 'desktop';
+        const dev = normalizePinDevice(pin.device);
         return dev === issueDeviceFilter;
       });
     }
@@ -1098,7 +1106,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         if (!(titleMatch || descMatch || numMatch)) return false;
       }
       if (issueDeviceFilter !== 'all') {
-        const dev = pin.device || 'desktop';
+        const dev = normalizePinDevice(pin.device);
         if (dev !== issueDeviceFilter) return false;
       }
       if (issueTypeFilter !== 'all' && issueTypeFilter !== 'comment') return false;
@@ -1137,7 +1145,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       setActivePageId(targetPin.pageId);
     }
 
-    const pinDevice = (targetPin.device || 'desktop') as 'desktop' | 'mobile';
+    const pinDevice = normalizePinDevice(targetPin.device);
     if (pinDevice !== viewMode) {
       handleViewModeChange(pinDevice);
     }
@@ -1327,14 +1335,20 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         setShowPermissionModal(false);
       } else {
         console.error("Permission request failed:", response.status);
-        alert("Failed to grant permission. Please try again.");
+        showToast("Failed to grant permission. Please try again.", 'error');
       }
     } catch (error: any) {
       console.error("Permission error details:", error);
       if (error.name === 'SyntaxError') {
-        alert("Server error: Received invalid response (likely HTML instead of JSON). Check your VITE_API_URL.");
+        showToast(
+          "Server error: Received invalid response. Please check your API configuration.",
+          'error'
+        );
       } else {
-        alert(`Network error: ${error.message || 'Check your connection'}`);
+        showToast(
+          `Network error: ${error.message || 'Check your connection'}`,
+          'error'
+        );
       }
     } finally {
       setPermissionLoading(false);
@@ -1379,7 +1393,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
   };
 
   const activePage = project?.pages.find(p => p.id === activePageId);
-  const activePins = pins.filter(p => p.pageId === activePageId && (p.device === viewMode || (!p.device && viewMode === 'desktop')));
+  const activePins = pins.filter(p => p.pageId === activePageId && normalizePinDevice(p.device) === viewMode);
 
   function normalizePageName(input: string, projectBaseUrl?: string): string {
     let raw = input.trim().toLowerCase();
@@ -1431,6 +1445,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         savedPin = await ApiService.updatePin(selectedPinId, {
           title: tempPin.title,
           description: tempPin.description,
+          device: tempPin.device || viewMode,
           type: targetType
         });
       } else {
@@ -1490,6 +1505,11 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       setSelectedPinId(null);
       setIsEditingPin(false);
 
+      showToast(
+        selectedPinId ? 'Annotation updated successfully' : 'Annotation added successfully',
+        'success'
+      );
+
       if (
         targetType === 'issue' &&
         project.mode === 'working'
@@ -1503,7 +1523,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         onNavigate('/login');
         return;
       }
-      alert('Failed to save pin');
+      showToast('Failed to save pin', 'error');
     }
   };
 
@@ -1512,19 +1532,27 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
 
     try {
       await ApiService.deletePin(selectedPinId);
-      const updatedPins = await ApiService.getPins(project.id);
-      setPins(updatedPins);
-      await refreshProjectIssues(project.id);
+
+      setPins(prev =>
+        prev.filter(pin => pin.id !== selectedPinId)
+      );
+
+      setProjectIssues(prev =>
+        prev.filter(issue => issue.pinId !== selectedPinId)
+      );
+
       setSelectedPinId(null);
       setTempPin(null);
       setIsEditingPin(false);
+
+      showToast('Annotation deleted successfully', 'success');
     } catch (error: any) {
       if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
         StorageService.clearUser();
         onNavigate('/login');
         return;
       }
-      alert('Failed to delete pin');
+      showToast('Failed to delete pin', 'error');
     }
   };
 
@@ -1535,6 +1563,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       y: pin.y,
       title: pin.title,
       description: pin.description,
+      device: normalizePinDevice(pin.device),
       type: pin.type || (project?.mode === 'working' ? 'issue' : 'comment')
     });
     setIsEditingPin(true);
@@ -1563,21 +1592,41 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
   const handlePublish = async () => {
     if (!project) return;
 
+    const wasPublished =
+      project.status === ProjectStatus.PUBLISHED;
+
     try {
       await ApiService.publishProject(project.id);
-      const updatedProject = await ApiService.getProject(project.id);
+
+      const updatedProject =
+        await ApiService.getProject(project.id);
+
       setProject(updatedProject);
-      alert(project.status !== ProjectStatus.PUBLISHED
-        ? "Project published successfully!"
-        : "Live version has been updated with your latest changes."
+
+      showToast(
+        wasPublished
+          ? 'Live version has been updated with your latest changes.'
+          : 'Project published successfully!',
+        'success'
       );
     } catch (error: any) {
-      if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
+      if (
+        error.status === 401 ||
+        error.status === 403 ||
+        (
+          error.response &&
+          (
+            error.response.status === 401 ||
+            error.response.status === 403
+          )
+        )
+      ) {
         StorageService.clearUser();
         onNavigate('/login');
         return;
       }
-      alert('Failed to publish project');
+
+      showToast('Failed to publish project', 'error');
     }
   };
 
@@ -2254,7 +2303,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
                 const pin = item.pin;
                 const page = project?.pages.find(p => p.id === pin?.pageId);
                 const pinType = pin?.type || 'issue';
-                const pinDevice = pin?.device || 'desktop';
+                const pinDevice = normalizePinDevice(pin?.device);
                 const isIssue = item.kind === 'issue';
                 const iss = isIssue ? item.issue : null;
 
@@ -2285,7 +2334,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
                     setActivePageId(targetPin.pageId);
                   }
 
-                  const device = (targetPin.device || 'desktop') as 'desktop' | 'mobile';
+                  const device = normalizePinDevice(targetPin.device);
                   if (device !== viewMode) {
                     handleViewModeChange(device);
                   }
@@ -2880,19 +2929,19 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       {/* Studio Toast Notification Banner (No Native Alert Boxes!) */}
       {toast.show && (
         <div className="fixed top-5 right-5 z-50 animate-in slide-in-from-top-4 duration-300 pointer-events-auto">
-          <div className={`flex items-center gap-3 px-4 py-3 rounded-2xl shadow-xl border backdrop-blur-md font-sans text-xs font-semibold ${
+          <div className={`flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg border bg-white font-sans text-xs font-semibold ${
             toast.type === 'error'
-              ? 'bg-red-50/95 border-red-200 text-red-700'
+              ? 'border-red-200 text-red-700'
               : toast.type === 'success'
-              ? 'bg-emerald-50/95 border-emerald-200 text-emerald-700'
-              : 'bg-slate-900/95 border-slate-700 text-white'
+              ? 'border-emerald-200 text-emerald-700'
+              : 'border-slate-200 text-slate-700'
           }`}>
             {toast.type === 'error' ? (
               <AlertCircle size={18} className="text-red-500 shrink-0" />
             ) : toast.type === 'success' ? (
               <CheckCircle size={18} className="text-emerald-500 shrink-0" />
             ) : (
-              <Info size={18} className="text-blue-400 shrink-0" />
+              <Info size={18} className="text-blue-500 shrink-0" />
             )}
             <span>{toast.message}</span>
             <button

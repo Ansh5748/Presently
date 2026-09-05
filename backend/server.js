@@ -1293,7 +1293,8 @@ app.patch('/projects/:projectId/pages/:pageId', authenticateToken, async (req, r
     const updates = req.body;
     const userId = req.user.id;
 
-    const project = await Project.findOne({ id: projectId, userId });
+    const project = await Project.findOne({ id: projectId, userId })
+      .select('id userId pages');
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
@@ -1307,11 +1308,20 @@ app.patch('/projects/:projectId/pages/:pageId', authenticateToken, async (req, r
       await Pin.deleteMany({ projectId, pageId });
       delete updates.deleteAllPins; // Don't save this to the page object
 
-      // Reindex remaining pins for that project
-      const projectPins = await Pin.find({ projectId }).sort({ number: 1 });
-      for (let i = 0; i < projectPins.length; i++) {
-        projectPins[i].number = i + 1;
-        await projectPins[i].save();
+      // Reindex remaining pins for that project using bulk write
+      const projectPins = await Pin.find({ projectId })
+        .select('id number')
+        .sort({ number: 1 })
+        .lean();
+
+      if (projectPins.length) {
+        const bulkOps = projectPins.map((p, i) => ({
+          updateOne: {
+            filter: { id: p.id },
+            update: { $set: { number: i + 1 } }
+          }
+        }));
+        await Pin.bulkWrite(bulkOps);
       }
     }
 
@@ -1336,7 +1346,8 @@ app.delete('/projects/:projectId/pages/:pageId', authenticateToken, async (req, 
     const userId = req.user.id;
 
     // Check if project exists and has more than 1 page
-    const project = await Project.findOne({ id: projectId, userId });
+    const project = await Project.findOne({ id: projectId, userId })
+      .select('id userId pages');
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
@@ -1348,16 +1359,25 @@ app.delete('/projects/:projectId/pages/:pageId', authenticateToken, async (req, 
     await Project.findOneAndUpdate(
       { id: projectId, userId },
       { $pull: { pages: { id: pageId } } }
-    );
+    ).select('id');
 
     // Delete associated pins
     await Pin.deleteMany({ projectId, pageId });
 
     // Reindex remaining pins for that project
-    const projectPins = await Pin.find({ projectId }).sort({ number: 1 });
-    for (let i = 0; i < projectPins.length; i++) {
-      projectPins[i].number = i + 1;
-      await projectPins[i].save();
+    const projectPins = await Pin.find({ projectId })
+      .select('id number')
+      .sort({ number: 1 })
+      .lean();
+
+    if (projectPins.length) {
+      const bulkOps = projectPins.map((pin, i) => ({
+        updateOne: {
+          filter: { id: pin.id },
+          update: { $set: { number: i + 1 } }
+        }
+      }));
+      await Pin.bulkWrite(bulkOps);
     }
 
     res.json({ message: 'Page deleted' });
@@ -1374,17 +1394,44 @@ app.post('/projects/:projectId/publish', authenticateToken, async (req, res) => 
     const { projectId } = req.params;
     const userId = req.user.id;
 
-    const project = await Project.findOne({ id: projectId, userId });
+    const project = await Project.findOne({ id: projectId, userId })
+      .select('id userId pages status');
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    // Fetch current pins to snapshot
-    const pins = await Pin.find({ projectId });
-    // Create frozen snapshot
+    const normalizeDevice = (device) => {
+      const raw = String(device ?? '').trim().toLowerCase();
+      if (raw === 'mobile' || raw === 'android' || raw === 'ios' || raw === 'phone') {
+        return 'mobile';
+      }
+      return 'desktop';
+    };
+
+    // Fetch the latest pins from the live Pin collection.
+    // Always snapshot the current device/page/position values.
+    const pins = await Pin.find({ projectId })
+      .select('id projectId pageId x y number title description device type createdAt updatedAt')
+      .lean();
+
     project.publishedSnapshot = {
-      pages: project.pages.map(page => ({ ...page.toObject() })),
-      pins: pins.map(pin => ({ ...pin.toObject() })),
+      pages: project.pages.map(page => ({
+        ...page.toObject()
+      })),
+      pins: pins.map(pin => ({
+        id: pin.id,
+        projectId: pin.projectId,
+        pageId: pin.pageId,
+        x: pin.x,
+        y: pin.y,
+        number: pin.number,
+        title: pin.title,
+        description: pin.description,
+        device: normalizeDevice(pin.device),
+        type: pin.type || 'issue',
+        createdAt: pin.createdAt,
+        updatedAt: pin.updatedAt
+      })),
       publishedAt: new Date()
     };
     project.status = 'PUBLISHED';
@@ -1406,7 +1453,8 @@ app.delete('/projects/:projectId', authenticateToken, async (req, res) => {
     const { projectId } = req.params;
     const userId = req.user.id;
 
-    const project = await Project.findOneAndDelete({ id: projectId, userId });
+    const project = await Project.findOneAndDelete({ id: projectId, userId })
+      .select('id');
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
@@ -1431,15 +1479,83 @@ app.get('/projects/:projectId/pins', async (req, res) => {
     const { projectId } = req.params;
     const { view } = req.query;
 
+    const normalizeDevice = (device) => {
+      const raw = String(device ?? '').trim().toLowerCase();
+      if (raw === 'mobile' || raw === 'android' || raw === 'ios' || raw === 'phone') {
+        return 'mobile';
+      }
+      return 'desktop';
+    };
+
     if (view === 'live') {
-      const project = await Project.findOne({ id: projectId });
-      if (project && project.status === 'PUBLISHED' && project.publishedSnapshot && project.publishedSnapshot.pins) {
-        return res.json(project.publishedSnapshot.pins);
+      const project = await Project.findOne({ id: projectId })
+        .select('id status publishedSnapshot.pins')
+        .lean();
+
+      if (
+        project &&
+        project.status === 'PUBLISHED' &&
+        project.publishedSnapshot &&
+        Array.isArray(project.publishedSnapshot.pins)
+      ) {
+        const snapshotPins = project.publishedSnapshot.pins;
+
+        // Build multi-key lookup from REAL Pin collection so device overrides
+        // work robustly even if pin IDs drifted between snapshot publish
+        // and current state.
+        // We use .lean() and fetch only the 4 tiny fields needed; this query
+        // is negligible in size and cost.
+        const realDeviceByKey = new Map();
+        const realPins = await Pin.find({ projectId })
+          .select('id number pageId device')
+          .lean();
+
+        realPins.forEach(rp => {
+          const device = normalizeDevice(rp.device);
+          // Key 1: raw pin.id match (most ideal)
+          if (rp.id) realDeviceByKey.set(`id:${rp.id}`, device);
+          // Key 2: number + pageId (stable logical identity for the same pin)
+          if (typeof rp.number === 'number' && rp.pageId) {
+            realDeviceByKey.set(`np:${rp.number}|${rp.pageId}`, device);
+          }
+          // Key 3: number only (fallback for pins that existed before
+          // pageId was reliably propagated or single-page projects)
+          if (typeof rp.number === 'number') {
+            realDeviceByKey.set(`n:${rp.number}`, device);
+          }
+        });
+
+        const mergedPins = snapshotPins.map(pin => {
+          let resolvedDevice = null;
+
+          if (pin.id) resolvedDevice = realDeviceByKey.get(`id:${pin.id}`);
+
+          if (resolvedDevice == null && typeof pin.number === 'number' && pin.pageId) {
+            resolvedDevice = realDeviceByKey.get(`np:${pin.number}|${pin.pageId}`);
+          }
+
+          if (resolvedDevice == null && typeof pin.number === 'number') {
+            resolvedDevice = realDeviceByKey.get(`n:${pin.number}`);
+          }
+
+          if (resolvedDevice == null) {
+            resolvedDevice = normalizeDevice(pin.device);
+          }
+
+          return {
+            ...pin,
+            device: resolvedDevice
+          };
+        });
+
+        return res.json(mergedPins);
       }
       return res.json([]);
     }
 
-    const pins = await Pin.find({ projectId }).sort({ number: 1 });
+    const pins = await Pin.find({ projectId })
+      .sort({ number: 1 })
+      .lean();
     res.json(pins);
   } catch (error) {
     console.error('[Get Pins] Error:', error);
@@ -1452,6 +1568,14 @@ app.post('/projects/:projectId/pins', authenticateToken, async (req, res) => {
   try {
     const { projectId } = req.params;
     const { pageId, x, y, title, description, device, type } = req.body;
+
+    const normalizeDevice = (dev) => {
+      const raw = String(dev ?? '').trim().toLowerCase();
+      if (raw === 'mobile' || raw === 'android' || raw === 'ios' || raw === 'phone') {
+        return 'mobile';
+      }
+      return 'desktop';
+    };
 
     // Only fetch the tiny amount of project metadata needed here.
     // NEVER load pages/imageUrl/Base64 for pin creation.
@@ -1481,7 +1605,7 @@ app.post('/projects/:projectId/pins', authenticateToken, async (req, res) => {
       number: nextNumber,
       title,
       description,
-      device: device || 'desktop',
+      device: normalizeDevice(device),
       type: type || 'comment'
     });
 
@@ -1501,11 +1625,23 @@ app.patch('/pins/:pinId', authenticateToken, async (req, res) => {
     const { pinId } = req.params;
     const updates = req.body;
 
+    const normalizeDevice = (dev) => {
+      const raw = String(dev ?? '').trim().toLowerCase();
+      if (raw === 'mobile' || raw === 'android' || raw === 'ios' || raw === 'phone') {
+        return 'mobile';
+      }
+      return 'desktop';
+    };
+
+    if (updates.device !== undefined) {
+      updates.device = normalizeDevice(updates.device);
+    }
+
     const pin = await Pin.findOneAndUpdate(
       { id: pinId },
       updates,
-      { new: true }
-    );
+      { new: true, select: 'id projectId pageId x y number title description device type createdAt updatedAt' }
+    ).lean();
 
     if (!pin) {
       return res.status(404).json({ error: 'Pin not found' });
@@ -1524,16 +1660,27 @@ app.delete('/pins/:pinId', authenticateToken, async (req, res) => {
   try {
     const { pinId } = req.params;
 
-    const pin = await Pin.findOneAndDelete({ id: pinId });
+    const pin = await Pin.findOneAndDelete({ id: pinId })
+      .select('id projectId number');
+
     if (!pin) {
       return res.status(404).json({ error: 'Pin not found' });
     }
 
-    // Reindex remaining pins for that project
-    const projectPins = await Pin.find({ projectId: pin.projectId }).sort({ number: 1 });
-    for (let i = 0; i < projectPins.length; i++) {
-      projectPins[i].number = i + 1;
-      await projectPins[i].save();
+    // Reindex remaining pins for that project using bulk write (much faster than N .save() calls)
+    const remainingPins = await Pin.find({ projectId: pin.projectId })
+      .select('id number')
+      .sort({ number: 1 })
+      .lean();
+
+    if (remainingPins.length) {
+      const bulkOps = remainingPins.map((p, i) => ({
+        updateOne: {
+          filter: { id: p.id },
+          update: { $set: { number: i + 1 } }
+        }
+      }));
+      await Pin.bulkWrite(bulkOps);
     }
 
     res.json({ message: 'Pin deleted' });
