@@ -221,31 +221,42 @@ app.get('/projects/previews', authenticateToken, async (req, res) => {
       const userEmail = req.user.email;
       const { name, clientName, websiteUrl, initialPageUrl, groupId, mode = 'present' } = req.body;
 
-      // Check subscription (skip for special emails)
-      if (FREE_EMAILS[userEmail] !== 'skip') {
-        const [activeSubscription, pendingSubscription, expiredSubscription] = await Promise.all([
-          Subscription.findOne({
-            userId,
-            status: 'active',
-            expiresAt: { $gt: new Date() }
-          }).lean(),
-          Subscription.findOne({
-            userId,
-            status: 'pending_verification'
-          }).lean(),
-          Subscription.findOne({
-            userId,
-            status: { $in: ['active', 'expired'] },
-            expiresAt: { $lte: new Date() }
-          }).lean()
-        ]);
+      // Check subscription & project creation limits
+      if (FREE_EMAILS[userEmail] !== 'skip' && userEmail !== 'divyanshgupta5748@gmail.com') {
+        const userObjId = mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : userId;
+        const activeSub = await Subscription.findOne({
+          $or: [
+            { userId: userObjId },
+            { email: userEmail }
+          ],
+          status: 'active',
+          expiresAt: { $gt: new Date() }
+        }).sort({ expiresAt: -1 }).lean();
 
-        if (!activeSubscription) {
-          if (pendingSubscription) return res.status(403).json({ error: 'Payment verification pending', pendingVerification: true });
-          if (expiredSubscription) return res.status(403).json({ error: 'Subscription expired', isExpired: true });
+        const planRaw = (activeSub?.plan || 'free').toLowerCase();
+        let plan = 'free';
+        if (planRaw.includes('starter')) plan = 'starter';
+        else if (planRaw.includes('pro')) plan = 'pro';
+        else if (planRaw.includes('studio')) plan = 'studio';
+
+        const planLimits = {
+          free: 1,
+          starter: 5,
+          pro: 25,
+          studio: 50
+        };
+
+        const maxProjects = planLimits[plan] || 1;
+        const userProjectCount = await Project.countDocuments({
+          $or: [{ userId }, { userId: userObjId }]
+        });
+
+        if (userProjectCount >= maxProjects) {
           return res.status(403).json({
-            error: 'Active subscription required',
-            requiresSubscription: true
+            error: `${plan.toUpperCase()} plan allows up to ${maxProjects} project${maxProjects === 1 ? '' : 's'}. Upgrade your subscription to create more projects.`,
+            requiresSubscription: true,
+            currentPlan: plan,
+            limit: maxProjects
           });
         }
       }
@@ -1151,6 +1162,53 @@ app.get('/projects/previews', authenticateToken, async (req, res) => {
       res.status(201).json(populated);
     } catch (error) {
       console.error('[Send Group Message] Error:', error);
+      res.status(500).json({ error: 'Server error' });
+    }
+  });
+
+  // Delete single message
+  app.delete('/messages/:messageId', authenticateToken, async (req, res) => {
+    try {
+      const { messageId } = req.params;
+
+      const msg = await Message.findOne({
+        $or: [{ id: messageId }, { _id: mongoose.Types.ObjectId.isValid(messageId) ? messageId : null }]
+      });
+
+      if (!msg) {
+        return res.status(404).json({ error: 'Message not found' });
+      }
+
+      await Message.deleteOne({ _id: msg._id });
+      res.json({ success: true, messageId: msg.id || msg._id });
+    } catch (error) {
+      console.error('[Delete Message] Error:', error);
+      res.status(500).json({ error: 'Server error' });
+    }
+  });
+
+  // Delete batch messages
+  app.post('/messages/delete-batch', authenticateToken, async (req, res) => {
+    try {
+      const { messageIds } = req.body;
+
+      if (!Array.isArray(messageIds) || messageIds.length === 0) {
+        return res.status(400).json({ error: 'messageIds array required' });
+      }
+
+      const validObjIds = messageIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+
+      const query = {
+        $or: [
+          { id: { $in: messageIds } },
+          { _id: { $in: validObjIds } }
+        ]
+      };
+
+      const result = await Message.deleteMany(query);
+      res.json({ success: true, deletedCount: result.deletedCount });
+    } catch (error) {
+      console.error('[Delete Batch Messages] Error:', error);
       res.status(500).json({ error: 'Server error' });
     }
   });

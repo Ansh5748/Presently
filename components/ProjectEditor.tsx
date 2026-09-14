@@ -8,8 +8,7 @@ import { Project, Pin, ProjectStatus, ProjectPage, AnnotationIssue } from '../ty
 import { ArrowLeft, Share2, X, MapPin, Eye, Loader2, Image as ImageIcon, Trash2, Layout, Link as LinkIcon, Pencil, Monitor, Smartphone, ChevronDown, ChevronUp, Search, SlidersHorizontal, AlertCircle, MessageSquare, Globe, CheckCircle, Info } from 'lucide-react';
 
 const SPECIAL_EMAILS = [
-  'divyanshgupta5748@gmail.com',
-  'divyanshgupta4949@gmail.com'
+  'divyanshgupta5748@gmail.com'
 ];
 
 // Production screenshot compressor.
@@ -368,6 +367,8 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
   const [loading, setLoading] = useState(true);
   const [showMobileScreens, setShowMobileScreens] = useState(false);
   const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
+  const [userPlan, setUserPlan] = useState<string>('free');
+  const [isExpired, setIsExpired] = useState(false);
   const [subscriptionModalMode, setSubscriptionModalMode] = useState<'default' | 'expired' | 'subscribe'>('default');
   const [showPendingModal, setShowPendingModal] = useState(false);
   const [showIssueModal, setShowIssueModal] = useState(false);
@@ -739,7 +740,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         );
       }
     } catch (error: any) {
-      if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
+      if (error.status === 401 || (error.response && error.response.status === 401)) {
         StorageService.clearUser();
         onNavigate('/login');
         return;
@@ -814,27 +815,28 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
 
     try {
       const user = StorageService.getUser() as any;
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/subscription/status`, {
-        headers: { 'Authorization': `Bearer ${user.accessToken}` }
+      const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/subscription/status?t=${Date.now()}`, {
+        headers: { 'Authorization': `Bearer ${user.accessToken}` },
+        cache: 'no-store'
       });
       const status = await response.json();
-
-      if (status.hasActiveSubscription) return true;
-      if (status.pendingVerification) {
-        setShowPendingModal(true);
-        return false;
+      if (status.plan) {
+        setUserPlan(status.plan);
       }
-      if (status.isExpired) {
-        setSubscriptionModalMode('expired');
+      setIsExpired(status.isExpired || false);
+
+      const maxPages = status.limits?.maxPagesPerProject || (status.hasActiveSubscription ? 10 : 3);
+      const currentPageCount = project?.pages ? project.pages.length : 0;
+
+      if (currentPageCount >= maxPages) {
+        setSubscriptionModalMode('subscribe');
         setShowSubscriptionModal(true);
         return false;
       }
 
-      setSubscriptionModalMode('subscribe');
-      setShowSubscriptionModal(true);
-      return false;
+      return true;
     } catch (e) {
-      return false;
+      return true;
     }
   };
 
@@ -964,7 +966,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
         setShowIssueModal(true);
       }
     } catch (error: any) {
-      if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
+      if (error.status === 401 || (error.response && error.response.status === 401)) {
         StorageService.clearUser();
         onNavigate('/login');
         return;
@@ -993,7 +995,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
 
       showToast('Annotation deleted successfully', 'success');
     } catch (error: any) {
-      if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
+      if (error.status === 401 || (error.response && error.response.status === 401)) {
         StorageService.clearUser();
         onNavigate('/login');
         return;
@@ -1058,14 +1060,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
     } catch (error: any) {
       if (
         error.status === 401 ||
-        error.status === 403 ||
-        (
-          error.response &&
-          (
-            error.response.status === 401 ||
-            error.response.status === 403
-          )
-        )
+        (error.response && error.response.status === 401)
       ) {
         StorageService.clearUser();
         onNavigate('/login');
@@ -1184,7 +1179,6 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
     e.stopPropagation();
 
     if (!checkPermission()) return;
-    if (!(await checkSubscriptionAccess())) return;
 
     setActivePageId(page.id);
     const targetUrl = page.originalUrl || project?.websiteUrl || '';
@@ -1245,6 +1239,11 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
 
     // IF ADDING PAGE FROM MOBILE MODE: RUN DESKTOP CAPTURE FIRST TO CREATE PAGE, THEN AUTO-SWITCH TO MOBILE
     const isAddingFromMobile = urlModalConfig.mode === 'add' && viewMode === 'mobile';
+
+    // CHECK SUBSCRIPTION & PAGE LIMIT BEFORE LAUNCHING LIVECAPTUREMODAL
+    if (urlModalConfig.mode === 'add' && !(await checkSubscriptionAccess())) {
+      return;
+    }
 
     // IF URL WAS CHANGED OR ADDING NEW PAGE: LAUNCH LIVECAPTUREMODAL
     setLiveCaptureModalConfig({
@@ -1374,13 +1373,17 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       showToast("New page added successfully", 'success');
       setLiveCaptureModalConfig({ isOpen: false, url: '', device: 'desktop', isEditingPage: false, autoSwitchMobileAfterAdd: false });
     } catch (error: any) {
-      if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
+      if (error.status === 401 || (error.response && error.response.status === 401)) {
         StorageService.clearUser();
         showToast("Session expired. Please log in again.", 'error');
         onNavigate('/login');
         return;
       }
-      showToast("Failed to save live screenshot.", 'error');
+      if (error.status === 403 || error.requiresSubscription || error.message === 'SUBSCRIPTION_REQUIRED') {
+        setShowSubscriptionModal(true);
+      } else {
+        showToast(error.message || "Failed to save live screenshot.", 'error');
+      }
       setLiveCaptureModalConfig({ isOpen: false, url: '', device: 'desktop', isEditingPage: false, autoSwitchMobileAfterAdd: false });
     }
   };
@@ -1414,12 +1417,16 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
           setActivePageId(newPage.id);
           showToast("Image uploaded successfully", 'success');
         } catch (error: any) {
-          if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
+          if (error.status === 401 || (error.response && error.response.status === 401)) {
             StorageService.clearUser();
             onNavigate('/login');
             return;
           }
-          showToast('Failed to upload image', 'error');
+          if (error.status === 403 || error.requiresSubscription || error.message === 'SUBSCRIPTION_REQUIRED') {
+            setShowSubscriptionModal(true);
+          } else {
+            showToast('Failed to upload image', 'error');
+          }
         }
       };
 
@@ -1468,7 +1475,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
       setPins(updatedPins);
       showToast("Page deleted successfully", 'success');
     } catch (error: any) {
-      if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
+      if (error.status === 401 || (error.response && error.response.status === 401)) {
         StorageService.clearUser();
         onNavigate('/login');
         return;
@@ -1480,7 +1487,6 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
   const handleViewModeChange = async (mode: 'desktop' | 'mobile') => {
     if (mode === 'mobile' && activePage && activePage.originalUrl && !(activePage as any).mobileImageUrl) {
       if (!checkPermission()) return;
-      if (!(await checkSubscriptionAccess())) return;
 
       // Pop up LiveCaptureModal in Android format!
       setLiveCaptureModalConfig({
@@ -1927,6 +1933,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, onNavig
             // Refresh project or state if needed, but usually just closing is enough to let them try again
           }}
           userEmail={userEmail}
+          currentPlan={isExpired ? 'free' : userPlan}
           title={subscriptionModalMode === 'expired' ? 'Subscription Expired' : subscriptionModalMode === 'subscribe' ? 'Subscription Required' : undefined}
           message={subscriptionModalMode === 'expired' ? 'Your subscription is expired. Buy another plan to continue working on project.' : subscriptionModalMode === 'subscribe' ? 'You are not subscribed. Choose a plan to create project.' : undefined}
         />

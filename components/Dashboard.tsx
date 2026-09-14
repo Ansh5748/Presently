@@ -14,8 +14,7 @@ import {
 } from 'lucide-react';
 
 const SPECIAL_EMAILS = [
-  'divyanshgupta5748@gmail.com',
-  'divyanshgupta4949@gmail.com'
+  'divyanshgupta5748@gmail.com'
 ];
 
 interface DashboardProps {
@@ -35,6 +34,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
   const [loading, setLoading] = useState(false);
   const [userName, setUserName] = useState('');
   const [userEmail, setUserEmail] = useState('');
+  const [userPlan, setUserPlan] = useState<string>('free');
+  const [planLimits, setPlanLimits] = useState<{ maxProjects: number; maxPagesPerProject: number }>({ maxProjects: 1, maxPagesPerProject: 3 });
   const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
   const [hasActiveSubscription, setHasActiveSubscription] = useState(false);
   const [loadingSubscription, setLoadingSubscription] = useState(true);
@@ -54,12 +55,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
   const [permissionLoading, setPermissionLoading] = useState(false);
 
   // Admin State
-  const [adminPendingSubs, setAdminPendingSubs] = useState<any[]>([]);
   const [adminStats, setAdminStats] = useState<any>(null);
   const [adminAllSubs, setAdminAllSubs] = useState<any[]>([]);
   const [grantEmail, setGrantEmail] = useState('');
+  const [grantPlan, setGrantPlan] = useState<'free' | 'starter' | 'pro' | 'studio'>('starter');
   const [grantDuration, setGrantDuration] = useState(30);
-  const [activeAdminTab, setActiveAdminTab] = useState<'overview' | 'pending' | 'subscriptions' | 'grant'>('overview');
+  const [activeAdminTab, setActiveAdminTab] = useState<'overview' | 'subscriptions' | 'grant'>('overview');
 
   useEffect(() => {
     const user = StorageService.getUser() as any;
@@ -125,14 +126,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
     } catch (error) {
       if (
         (error as any).status === 401 ||
-        (error as any).status === 403 ||
-        (
-          (error as any).response &&
-          (
-            (error as any).response.status === 401 ||
-            (error as any).response.status === 403
-          )
-        )
+        ((error as any).response && (error as any).response.status === 401)
       ) {
         StorageService.clearUser();
         onNavigate('/');
@@ -162,13 +156,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
       const user = StorageService.getUser() as any;
       const headers = { 'Authorization': `Bearer ${user.accessToken}` };
       
-      const [pendingRes, statsRes, subsRes] = await Promise.all([
-        fetch(`${import.meta.env.VITE_API_URL}/admin/subscriptions/pending`, { headers }),
+      const [statsRes, subsRes] = await Promise.all([
         fetch(`${import.meta.env.VITE_API_URL}/admin/stats`, { headers }),
         fetch(`${import.meta.env.VITE_API_URL}/admin/subscriptions`, { headers })
       ]);
 
-      if (pendingRes.ok) setAdminPendingSubs(await pendingRes.json());
       if (statsRes.ok) setAdminStats(await statsRes.json());
       if (subsRes.ok) setAdminAllSubs(await subsRes.json());
 
@@ -177,14 +169,18 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
     }
   };
 
-  const checkSubscription = async () => {
+  const checkSubscription = async (forceRefresh = true) => {
     try {
-      const status: any = await ApiService.getSubscriptionStatus();
+      const status: any = await ApiService.getSubscriptionStatus(forceRefresh);
       setHasActiveSubscription(status.hasActiveSubscription);
+      setUserPlan(status.plan || 'free');
+      if (status.limits) {
+        setPlanLimits(status.limits);
+      }
       setPendingVerification(status.pendingVerification || false);
       setIsExpired(status.isExpired || false);
-    } catch (error) {
-      if ((error as any).status === 401 || (error as any).status === 403 || ((error as any).response && ((error as any).response.status === 401 || (error as any).response.status === 403))) {
+    } catch (error: any) {
+      if (error.status === 401 || (error.response && error.response.status === 401)) {
         StorageService.clearUser();
         onNavigate('/');
         return;
@@ -193,6 +189,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
     } finally {
       setLoadingSubscription(false);
     }
+  };
+
+  const checkProjectLimitBeforeAction = (): boolean => {
+    if (SPECIAL_EMAILS.includes(safeLower(userEmail))) return true;
+    if (projects.length >= planLimits.maxProjects) {
+      setSubscriptionModalMode('subscribe');
+      setShowSubscriptionModal(true);
+      return false;
+    }
+    return true;
   };
 
   const handleGrantPermission = async () => {
@@ -229,33 +235,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
   };
 
   const handleNewProjectClick = () => {
-    if (SPECIAL_EMAILS.includes(safeLower(userEmail))) {
-      setIsCreating(true);
-      return;
-    }
-
-    if (pendingVerification) {
-      setShowPendingModal(true);
-      return;
-    }
-
-    if (isExpired) {
-      setSubscriptionModalMode('expired');
-      setShowSubscriptionModal(true);
-      return;
-    }
-
-    if (hasActiveSubscription) {
-      setIsCreating(true);
-    } else {
-      setSubscriptionModalMode('subscribe');
-      setShowSubscriptionModal(true);
-    }
+    if (!checkProjectLimitBeforeAction()) return;
+    setIsCreating(true);
   };
 
   const handleQuickScan = (e: React.FormEvent) => {
     e.preventDefault();
     if (!quickUrl) return;
+    if (!checkProjectLimitBeforeAction()) return;
+
     let formattedUrl = quickUrl.trim();
     if (!formattedUrl.startsWith('http://') && !formattedUrl.startsWith('https://')) {
       formattedUrl = 'https://' + formattedUrl;
@@ -289,6 +277,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newProjectData.websiteUrl) return;
+    if (!checkProjectLimitBeforeAction()) return;
+
     setIsCreating(false);
     setLiveCaptureModalConfig({
       isOpen: true,
@@ -338,16 +328,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
       
       onNavigate(`/project/${newProject.id}`);
     } catch (error: any) {
-      if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
+      if (error.status === 401 || (error.response && error.response.status === 401)) {
         StorageService.clearUser();
         onNavigate('/');
         return;
       }
-      if (error.message === 'SUBSCRIPTION_REQUIRED') {
+      if (error.status === 403 || error.message === 'SUBSCRIPTION_REQUIRED' || error.requiresSubscription) {
         setShowSubscriptionModal(true);
       } else {
         if (error.message === "User not authenticated.") onNavigate('/');
-        alert("Failed to create project.");
+        else alert(error.message || "Failed to create project.");
       }
       setLiveCaptureModalConfig({ isOpen: false, url: '', device: 'desktop' });
     } finally {
@@ -362,7 +352,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
         await ApiService.deleteProject(id);
         setProjects(projects.filter(p => p.id !== id));
       } catch (error: any) {
-        if (error.status === 401 || error.status === 403 || (error.response && (error.response.status === 401 || error.response.status === 403))) {
+        if (error.status === 401 || (error.response && error.response.status === 401)) {
           StorageService.clearUser();
           onNavigate('/');
           return;
@@ -440,12 +430,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${user.accessToken}`
         },
-        body: JSON.stringify({ email: grantEmail, durationDays: grantDuration, plan: 'admin_grant' })
+        body: JSON.stringify({ email: grantEmail, durationDays: grantDuration, plan: grantPlan })
       });
 
       if (response.ok) {
         alert('Subscription granted successfully');
         setGrantEmail('');
+        await checkSubscription();
         loadAdminData();
       } else {
         const data = await response.json();
@@ -490,15 +481,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
 
           {/* Nav Controls */}
           <div className="flex items-center gap-1.5 w-full sm:w-auto justify-between sm:justify-end shrink-0 sm:ml-auto">
-            {!loadingSubscription && !hasActiveSubscription && !pendingVerification && (
-              <button 
-                onClick={() => setShowSubscriptionModal(true)}
-                className="flex items-center gap-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/80 px-2 sm:px-3.5 py-1.5 rounded-xl transition-all text-xs font-semibold"
-              >
-                <Crown size={14} className="text-amber-600" />
-                <span className="hidden sm:inline">Upgrade Plan</span>
-              </button>
-            )}
+            <button 
+              onClick={() => {
+                setSubscriptionModalMode('default');
+                setShowSubscriptionModal(true);
+              }}
+              className="flex items-center gap-1.5 bg-sky-50 hover:bg-sky-100 text-sky-900 border border-sky-200/80 px-2 sm:px-3.5 py-1.5 rounded-xl transition-all text-xs font-semibold"
+            >
+              <Crown size={14} className="text-sky-600" />
+              <span className="hidden sm:inline">Upgrade Plan</span>
+            </button>
             <button
               onClick={() => onNavigate('/faq')}
               className="flex items-center gap-1.5 bg-slate-100/80 hover:bg-slate-200/80 text-slate-700 border border-slate-200/80 px-2 sm:px-3.5 py-1.5 rounded-xl transition-all text-xs font-semibold"
@@ -554,8 +546,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
                   <Sparkles size={13} className="text-emerald-600" /> Active Delivery Workspace
                 </span>
                 {hasActiveSubscription && (
-                  <span className="px-2.5 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-md text-xs font-semibold flex items-center gap-1">
-                    <ShieldCheck size={13} className="text-blue-600" /> PRO Account
+                  <span className="px-2.5 py-0.5 bg-sky-50 text-sky-800 border border-sky-200 rounded-md text-xs font-semibold flex items-center gap-1 uppercase">
+                    <ShieldCheck size={13} className="text-sky-600" /> {userPlan} Account
                   </span>
                 )}
               </div>
@@ -599,14 +591,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
               </h2>
               <div className="flex gap-1.5">
                 <button onClick={() => setActiveAdminTab('overview')} className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${activeAdminTab === 'overview' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-200/80'}`}>Overview</button>
-                <button onClick={() => setActiveAdminTab('pending')} className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${activeAdminTab === 'pending' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-200/80'}`}>Pending ({adminPendingSubs.length})</button>
                 <button onClick={() => setActiveAdminTab('subscriptions')} className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${activeAdminTab === 'subscriptions' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-200/80'}`}>Subscriptions</button>
                 <button onClick={() => setActiveAdminTab('grant')} className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${activeAdminTab === 'grant' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-200/80'}`}>Grant Plan</button>
               </div>
             </div>
 
             {activeAdminTab === 'overview' && adminStats && (
-              <div className="p-6 grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="bg-slate-50 p-4 rounded-xl border border-slate-200/60">
                   <div className="flex items-center gap-2 text-slate-700 mb-1"><Users size={18} /> <span className="font-medium text-xs">Total Users</span></div>
                   <p className="text-xl font-bold text-slate-900">{adminStats.totalUsers}</p>
@@ -619,59 +610,47 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
                   <div className="flex items-center gap-2 text-amber-700 mb-1"><DollarSign size={18} /> <span className="font-medium text-xs">Revenue</span></div>
                   <p className="text-xl font-bold text-slate-900">₹{adminStats.revenue}</p>
                 </div>
-                <div className="bg-purple-50/50 p-4 rounded-xl border border-purple-200/60">
-                  <div className="flex items-center gap-2 text-purple-700 mb-1"><CheckCircle size={18} /> <span className="font-medium text-xs">Pending Manual</span></div>
-                  <p className="text-xl font-bold text-slate-900">{adminStats.pendingManual}</p>
-                </div>
               </div>
             )}
 
             {activeAdminTab === 'grant' && (
               <div className="p-6">
                 <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2 text-sm"><Gift size={16} /> Grant Subscription</h3>
-                <form onSubmit={handleAdminGrantSub} className="flex gap-4 items-end">
-                  <div className="flex-1">
+                <form onSubmit={handleAdminGrantSub} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                  <div>
                     <label className="block text-xs font-medium text-slate-700 mb-1">User Email</label>
                     <input type="email" required value={grantEmail} onChange={e => setGrantEmail(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="user@example.com" />
                   </div>
-                  <div className="w-32">
-                    <label className="block text-xs font-medium text-slate-700 mb-1">Days</label>
-                    <input type="number" required value={grantDuration} onChange={e => setGrantDuration(parseInt(e.target.value))} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">Target Plan</label>
+                    <select
+                      value={grantPlan}
+                      onChange={e => setGrantPlan(e.target.value as any)}
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
+                    >
+                      <option value="free">Free (1 project / 3 pages)</option>
+                      <option value="starter">Starter (5 projects / 10 pages)</option>
+                      <option value="pro">Pro (25 projects / 25 pages)</option>
+                      <option value="studio">Studio (50 projects / 50 pages)</option>
+                    </select>
                   </div>
-                  <button type="submit" className="bg-slate-900 text-white px-4 py-2 rounded-lg hover:bg-slate-800 font-medium text-sm">Grant</button>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 mb-1">Duration (Days)</label>
+                    <input type="number" required value={grantDuration} onChange={e => setGrantDuration(parseInt(e.target.value) || 30)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="30" />
+                  </div>
+                  <button type="submit" className="bg-slate-900 text-white px-4 py-2 rounded-lg hover:bg-slate-800 font-medium text-sm">Grant Plan</button>
                 </form>
               </div>
             )}
+
             <div className="divide-y divide-slate-100">
-              {activeAdminTab === 'pending' && (adminPendingSubs.length === 0 ? <p className="p-6 text-slate-500 text-center text-xs">No pending verifications.</p> : adminPendingSubs.map((sub) => (
-                <div key={sub._id} className="p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                  <div>
-                    <p className="font-medium text-slate-900 text-xs">{sub.userId?.name} ({sub.userId?.email})</p>
-                    <p className="text-[11px] text-slate-500">Plan: {sub.plan} | Amount: {sub.currency} {sub.amount}</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button 
-                      onClick={() => handleAdminVerify(sub._id, 'approve')}
-                      className="flex items-center gap-1 bg-emerald-100 text-emerald-700 px-3 py-1 rounded-lg text-xs font-medium hover:bg-emerald-200"
-                    >
-                      <CheckCircle size={14} /> Approve
-                    </button>
-                    <button 
-                      onClick={() => handleAdminVerify(sub._id, 'reject')}
-                      className="flex items-center gap-1 bg-red-100 text-red-700 px-3 py-1 rounded-lg text-xs font-medium hover:bg-red-200"
-                    >
-                      <XCircle size={14} /> Reject
-                    </button>
-                  </div>
-                </div>
-              )))}
               {activeAdminTab === 'subscriptions' && (adminAllSubs.length === 0 ? <p className="p-6 text-slate-500 text-center text-xs">No subscriptions found.</p> : adminAllSubs.map((sub) => (
                 <div key={sub._id} className="p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 hover:bg-slate-50">
                   <div>
-                    <p className="font-medium text-slate-900 text-xs">{sub.userId?.name} ({sub.userId?.email})</p>
+                    <p className="font-medium text-slate-900 text-xs">{sub.userId?.name || 'User'} ({sub.userId?.email || sub.email})</p>
                     <p className="text-[11px] text-slate-500">
-                      <span className={`inline-block w-2 h-2 rounded-full mr-2 ${sub.status === 'active' ? 'bg-emerald-500' : sub.status === 'pending_verification' ? 'bg-amber-500' : 'bg-red-500'}`}></span>
-                      {sub.status.toUpperCase()} | {sub.plan} | {sub.paymentMethod}
+                      <span className={`inline-block w-2 h-2 rounded-full mr-2 ${sub.status === 'active' ? 'bg-emerald-500' : 'bg-slate-400'}`}></span>
+                      {sub.status.toUpperCase()} | {sub.plan.toUpperCase()} | {sub.paymentMethod}
                     </p>
                   </div>
                   {sub.status === 'active' && (
@@ -1141,6 +1120,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onLogout }) =>
             }
           }}
           userEmail={userEmail}
+          currentPlan={isExpired ? 'free' : userPlan}
           title={subscriptionModalMode === 'expired' ? 'Subscription Expired' : subscriptionModalMode === 'subscribe' ? 'Subscription Required' : undefined}
           message={subscriptionModalMode === 'expired' ? 'Your subscription is expired. Buy another plan to continue working on project.' : subscriptionModalMode === 'subscribe' ? 'You are not subscribed. Choose a plan to create project.' : undefined}
         />

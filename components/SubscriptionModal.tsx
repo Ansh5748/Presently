@@ -1,489 +1,494 @@
-import React, { useState, useEffect } from 'react';
-import { X, Check, Loader2, CreditCard, Sparkles, Copy, Zap, Shield, Users, BarChart3, ArrowRight } from 'lucide-react';
+import React, { useState } from 'react';
+import { X, ArrowUpRight, Sparkles, Shield, Crown, Tag, Check, AlertCircle, Loader2 } from 'lucide-react';
+import { StorageService } from '../services/storageService';
+import { ApiService } from '../services/apiService';
 
 interface SubscriptionModalProps {
   onClose: () => void;
-  onSuccess: (isPending?: boolean) => void;
-  userEmail: string;
+  onSuccess?: (isPending?: boolean) => void;
+  userEmail?: string;
+  currentPlan?: string;
   title?: string;
   message?: string;
 }
 
-// Load Razorpay script
-const loadRazorpayScript = () => {
-  return new Promise((resolve) => {
-    const script = document.createElement('script');
-    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
-    script.onload = () => resolve(true);
-    script.onerror = () => resolve(false);
-    document.body.appendChild(script);
-  });
-};
-
-export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({ onClose, onSuccess, userEmail, title, message }) => {
-  const [selectedPlan, setSelectedPlan] = useState<'1_month' | '6_month' | '12_month'>('1_month');
-  const [selectedCurrency, setSelectedCurrency] = useState<'USD' | 'INR'>('USD');
-  const [couponCode, setCouponCode] = useState('');
+export const SubscriptionModal: React.FC<SubscriptionModalProps> = ({
+  onClose,
+  onSuccess,
+  userEmail,
+  currentPlan = 'free',
+  title,
+  message
+}) => {
+  const [billingCycle, setBillingCycle] = useState<'monthly' | 'yearly'>('monthly');
+  const [couponCodeInput, setCouponCodeInput] = useState('');
   const [appliedCoupon, setAppliedCoupon] = useState<string | null>(null);
-  const [discount, setDiscount] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [manualPaymentData, setManualPaymentData] = useState<{
-    upiId?: string;
-    paypalUsername?: string;
-    amount: number;
-    currency: string;
-    orderId: string;
-  } | null>(null);
+  const [discountPercent, setDiscountPercent] = useState<number>(0);
+  const [couponError, setCouponError] = useState<string | null>(null);
+  const [couponSuccess, setCouponSuccess] = useState<string | null>(null);
+  const [loadingPlanId, setLoadingPlanId] = useState<string | null>(null);
+  const [activePlanState, setActivePlanState] = useState<string | null>(null);
 
-  const plans = {
-    USD: {
-      '1_month': { price: 10, name: '1 Month' },
-      '6_month': { price: 55, name: '6 Months' },
-      '12_month': { price: 110, name: '12 Months' }
-    },
-    INR: {
-      '1_month': { price: 900, name: '1 Month' },
-      '6_month': { price: 4300, name: '6 Months' },
-      '12_month': { price: 9800, name: '12 Months' }
+  const handleApplyCoupon = (codeToApply?: string) => {
+    const code = (codeToApply || couponCodeInput).trim().toUpperCase();
+    setCouponError(null);
+    setCouponSuccess(null);
+
+    if (!code) {
+      setCouponError('Please enter a promo code.');
+      return;
     }
-  };
 
-  const originalPrice = plans[selectedCurrency][selectedPlan].price;
-  const finalPrice = Math.round(originalPrice * (1 - discount / 100));
-
-  const handleApplyCoupon = () => {
-    const code = couponCode.trim().toUpperCase();
-    if (code === 'FREEDG100' && selectedPlan === '1_month') {
-      setDiscount(100);
-      setAppliedCoupon(code);
-      setError('');
+    if (code === 'FREEDG100') {
+      setAppliedCoupon('FREEDG100');
+      setDiscountPercent(100);
+      setCouponSuccess('🎉 FREEDG100 applied: 100% OFF discount!');
+      setCouponCodeInput('FREEDG100');
     } else if (code === 'OFFERDG50') {
-      setDiscount(50);
-      setAppliedCoupon(code);
-      setError('');
-    } else if (code) {
-      setError('Invalid coupon code');
-      setDiscount(0);
-      setAppliedCoupon(null);
+      setAppliedCoupon('OFFERDG50');
+      setDiscountPercent(50);
+      setCouponSuccess('🎉 OFFERDG50 applied: 50% OFF discount!');
+      setCouponCodeInput('OFFERDG50');
+    } else {
+      setCouponError('Invalid promo code. Try OFFERDG50 or FREEDG100');
     }
   };
 
-  const handleSubscribe = async () => {
-    setLoading(true);
-    setError('');
+  const handleRemoveCoupon = () => {
+    setAppliedCoupon(null);
+    setDiscountPercent(0);
+    setCouponCodeInput('');
+    setCouponError(null);
+    setCouponSuccess(null);
+  };
 
-    try {
-      // Get user token
-      const userData = localStorage.getItem('presently_user');
-      if (!userData) {
-        throw new Error('Please login first');
+  const getPaymentLink = (planId: string, cycle: 'monthly' | 'yearly'): string => {
+    const planUpper = planId.toUpperCase();
+    const cycleUpper = cycle.toUpperCase();
+
+    if (appliedCoupon) {
+      const couponUpper = appliedCoupon.toUpperCase();
+      // 1. Check VITE_RAZORPAY_LINK_${PLAN}_${CYCLE}_${COUPON}
+      const couponEnvKey = `VITE_RAZORPAY_LINK_${planUpper}_${cycleUpper}_${couponUpper}`;
+      const couponLink = (import.meta.env as any)[couponEnvKey];
+      if (couponLink) return couponLink;
+
+      // 2. Check VITE_RAZORPAY_LINK_${PLAN}_${CYCLE}_${DISCOUNT}
+      if (discountPercent > 0) {
+        const discountEnvKey = `VITE_RAZORPAY_LINK_${planUpper}_${cycleUpper}_${discountPercent}`;
+        const discountLink = (import.meta.env as any)[discountEnvKey];
+        if (discountLink) return discountLink;
       }
-      const { accessToken } = JSON.parse(userData);
+    }
 
-      // Create order
-      const orderResponse = await fetch(`${import.meta.env.VITE_API_URL}/subscription/create-order`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${accessToken}`
-        },
-        body: JSON.stringify({
-          plan: selectedPlan,
-          currency: selectedCurrency,
-          amount: finalPrice,
-          couponCode: appliedCoupon
-        })
-      });
+    // 3. Base ENV link
+    const envKey = `VITE_RAZORPAY_LINK_${planUpper}_${cycleUpper}`;
+    const link = (import.meta.env as any)[envKey];
+    if (link) return link;
 
-      const orderData = await orderResponse.json();
+    if (appliedCoupon) {
+      return `https://razorpay.me/@presently_${planId}_${cycle}_${appliedCoupon.toLowerCase()}`;
+    }
+    return `https://razorpay.me/@presently_${planId}_${cycle}`;
+  };
 
-      if (!orderResponse.ok) {
-        throw new Error(orderData.error || 'Failed to create order');
-      }
+  const handleUpgrade = async (planId: string) => {
+    if (planId === 'free') return;
 
-      // Check if auto-approved (for special email)
-      if (orderData.autoApproved) {
-        alert(orderData.message || 'Subscription activated!');
-        onSuccess(false);
-        return;
-      }
+    // FOR 100% OFF DISCOUNT (FREEDG100 or 100% discount): BYPASS RAZORPAY & ACTIVATE DIRECTLY
+    if (discountPercent === 100 || appliedCoupon === 'FREEDG100') {
+      setLoadingPlanId(planId);
+      setCouponError(null);
+      try {
+        const user = StorageService.getUser() as any;
+        const token = user?.accessToken || user?.token;
+        const apiUrl = import.meta.env.VITE_API_URL || '/api';
 
-      // Check if custom/manual payment
-      if (orderData.customPayment) {
-        setManualPaymentData({
-          upiId: orderData.upiId,
-          paypalUsername: orderData.paypalUsername,
-          amount: orderData.amount,
-          currency: orderData.currency,
-          orderId: orderData.orderId
+        const response = await fetch(`${apiUrl}/subscription/create-order`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({
+            plan: planId,
+            currency: 'INR',
+            amount: 0,
+            couponCode: appliedCoupon || 'FREEDG100'
+          })
         });
-        setLoading(false);
-        return;
-      }
 
-      // Load Razorpay
-      const scriptLoaded = await loadRazorpayScript();
-      if (!scriptLoaded) {
-        throw new Error('Razorpay SDK failed to load');
-      }
+        const data = await response.json();
+        if (response.ok && (data.autoApproved || data.success)) {
+          // Clear cached subscription status so fresh plan status is fetched immediately
+          ApiService.invalidateSubscriptionCache();
 
-      // Open Razorpay checkout
-      const options = {
-        key: orderData.key,
-        amount: orderData.amount,
-        currency: orderData.currency,
-        order_id: orderData.orderId,
-        name: 'Presently',
-        description: `${plans[selectedCurrency][selectedPlan].name} Subscription`,
-        handler: async (response: any) => {
-          try {
-            // Verify payment
-            const verifyResponse = await fetch(`${import.meta.env.VITE_API_URL}/subscription/verify-payment`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${accessToken}`
-              },
-              body: JSON.stringify({
-                orderId: response.razorpay_order_id,
-                paymentId: response.razorpay_payment_id,
-                signature: response.razorpay_signature
-              })
-            });
+          // Instantly update active plan state so FREE card vanishes and chosen plan displays ACTIVE PLAN
+          setActivePlanState(planId);
+          setCouponSuccess(`🎉 100% Discount Applied! ${planId.toUpperCase()} plan activated successfully.`);
 
-            if (!verifyResponse.ok) {
-              throw new Error('Payment verification failed');
-            }
-
-            alert('Subscription activated successfully!');
+          // Notify parent (Dashboard / ProjectEditor) to refresh state
+          if (onSuccess) {
             onSuccess(false);
-          } catch (err: any) {
-            setError(err.message);
-            setLoading(false);
           }
-        },
-        modal: {
-          ondismiss: () => {
-            setLoading(false);
-          }
-        },
-        theme: {
-          color: '#2563eb'
+
+          setTimeout(() => {
+            onClose();
+          }, 1200);
+        } else {
+          setCouponError(data.error || 'Failed to activate 100% discount plan. Please try again.');
         }
-      };
-
-      const razorpay = new (window as any).Razorpay(options);
-      razorpay.open();
-
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleManualVerify = async () => {
-    if (!manualPaymentData) return;
-    setLoading(true);
-    try {
-      const userData = localStorage.getItem('presently_user');
-      if (!userData) throw new Error('Please login first');
-      const { accessToken } = JSON.parse(userData);
-
-      const verifyResponse = await fetch(`${import.meta.env.VITE_API_URL}/subscription/verify-payment`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${accessToken}`
-        },
-        body: JSON.stringify({
-          orderId: manualPaymentData.orderId,
-          paymentId: 'manual_verification_' + Date.now()
-        })
-      });
-
-      const verifyData = await verifyResponse.json();
-
-      if (!verifyResponse.ok) {
-        throw new Error(verifyData.error || 'Payment verification failed');
+      } catch (err) {
+        setCouponError('Network error while activating free plan. Please try again.');
+      } finally {
+        setLoadingPlanId(null);
       }
+      return;
+    }
 
-      alert(verifyData.message || 'Subscription activated successfully!');
-      onSuccess(true);
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
+    // REGULAR PAID PLANS: OPEN RAZORPAY PAYMENT LINK
+    const link = getPaymentLink(planId, billingCycle);
+    window.open(link, '_blank');
+    if (onSuccess) {
+      onSuccess(false);
     }
   };
 
-  const isManualPayment = !!manualPaymentData;
+  const activePlanToUse = activePlanState || currentPlan || 'free';
+  const normalizedCurrentPlan = (activePlanToUse || 'free').toLowerCase();
+
+  const allPlans = [
+    {
+      id: 'free',
+      name: 'FREE',
+      tagline: 'For creators testing Presently.',
+      monthlyPrice: 0,
+      yearlyMonthlyPrice: 0,
+      yearlyTotal: 0,
+      popular: false,
+      buttonText: 'FREE TIER',
+      buttonVariant: 'secondary' as const,
+      features: [
+        '1 project creation limit',
+        'Up to 3 pages per project'
+      ]
+    },
+    {
+      id: 'starter',
+      name: 'STARTER',
+      tagline: 'For creators & freelance designers.',
+      monthlyPrice: 1000,
+      yearlyMonthlyPrice: 900,
+      yearlyTotal: 10800,
+      popular: false,
+      buttonText: 'UPGRADE VIA RAZORPAY',
+      buttonVariant: 'primary' as const,
+      features: [
+        'Up to 5 projects limit',
+        'Up to 10 pages per project limit'
+      ]
+    },
+    {
+      id: 'pro',
+      name: 'PRO',
+      tagline: 'For growing design teams & agencies.',
+      monthlyPrice: 3000,
+      yearlyMonthlyPrice: 2700,
+      yearlyTotal: 32400,
+      popular: true,
+      buttonText: 'UPGRADE VIA RAZORPAY',
+      buttonVariant: 'popular' as const,
+      features: [
+        'Up to 25 projects limit',
+        'Up to 25 pages per project limit'
+      ]
+    },
+    {
+      id: 'studio',
+      name: 'STUDIO',
+      tagline: 'For high-volume studios & enterprises.',
+      monthlyPrice: 5000,
+      yearlyMonthlyPrice: 4500,
+      yearlyTotal: 54000,
+      popular: false,
+      buttonText: 'UPGRADE VIA RAZORPAY',
+      buttonVariant: 'primary' as const,
+      features: [
+        'Up to 50 projects limit',
+        'Up to 50 pages per project limit'
+      ]
+    }
+  ];
+
+  // If user is on a paid plan, hide the FREE tier card
+  const plans = normalizedCurrentPlan !== 'free'
+    ? allPlans.filter(p => p.id !== 'free')
+    : allPlans;
 
   return (
-    <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[95vh] overflow-y-auto">
-        {/* Header - Enhanced */}
-        <div className="sticky top-0 bg-gradient-to-br from-blue-600 via-indigo-600 to-purple-600 text-white p-6 md:p-8 rounded-t-3xl z-10">
-          <div className="flex justify-between items-start">
-            <div className="flex-1">
-              <div className="flex items-center gap-3 mb-2">
-                <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-sm">
-                  {isManualPayment ? <CreditCard size={22} /> : <Sparkles size={22} />}
-                </div>
-                <h2 className="text-2xl md:text-3xl font-bold">
-                  {isManualPayment ? 'Complete Payment' : (title || 'Unlock Unlimited Projects')}
-                </h2>
-              </div>
-              <p className="text-blue-100 text-lg">
-                {isManualPayment ? 'Please complete the transfer below' : (message || 'Choose a plan that works for you')}
-              </p>
+    <div className="fixed inset-0 bg-slate-900/70 flex items-start sm:items-center justify-center z-50 backdrop-blur-xs p-2 sm:p-4 overflow-y-auto">
+      <div className="bg-slate-50 border-2 border-slate-900 rounded-xl sm:rounded-2xl shadow-[4px_4px_0px_0px_rgba(15,23,42,1)] sm:shadow-[8px_8px_0px_0px_rgba(15,23,42,1)] w-full max-w-5xl max-h-[94vh] sm:max-h-[92vh] flex flex-col overflow-hidden my-auto">
+        
+        {/* Header */}
+        <div className="bg-white border-b-2 border-slate-900 px-3.5 sm:px-6 py-2.5 sm:py-4 flex justify-between items-center shrink-0">
+          <div className="min-w-0 pr-2">
+            <div className="flex items-center gap-1.5 sm:gap-2 mb-0.5">
+              <Sparkles size={18} className="text-sky-500 shrink-0 sm:w-5 sm:h-5" />
+              <h2 className="text-base sm:text-2xl font-black text-slate-900 tracking-tight truncate">
+                {title || 'Flexible Subscription Plans'}
+              </h2>
             </div>
-            <button 
-              onClick={onClose} 
-              className="text-white hover:bg-white/20 p-2.5 rounded-xl transition-all duration-200 hover:scale-110"
+            <p className="text-[11px] sm:text-sm text-slate-600 font-medium line-clamp-2 sm:line-clamp-none">
+              {message || 'Choose the right plan to power your freelance & agency delivery workflow.'}
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 sm:p-2 text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 border-2 border-slate-900 rounded-xl transition-all font-bold shadow-[2px_2px_0px_0px_rgba(15,23,42,1)] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none shrink-0 cursor-pointer"
+          >
+            <X size={18} className="sm:w-5 sm:h-5" />
+          </button>
+        </div>
+
+        {/* Centered Billing Switcher */}
+        <div className="bg-slate-100/90 px-3 sm:px-6 py-2.5 sm:py-3 border-b-2 border-slate-900 flex justify-center items-center shrink-0">
+          <div className="inline-flex bg-white p-1 rounded-xl border-2 border-slate-900 shadow-[2px_2px_0px_0px_rgba(15,23,42,1)] sm:shadow-[3px_3px_0px_0px_rgba(15,23,42,1)]">
+            <button
+              onClick={() => setBillingCycle('monthly')}
+              className={`px-3 sm:px-5 py-1 sm:py-1.5 rounded-lg font-extrabold text-[11px] sm:text-xs transition-all cursor-pointer ${
+                billingCycle === 'monthly'
+                  ? 'bg-slate-900 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
             >
-              <X size={24} />
+              Monthly Billing
+            </button>
+            <button
+              onClick={() => setBillingCycle('yearly')}
+              className={`px-3 sm:px-5 py-1 sm:py-1.5 rounded-lg font-extrabold text-[11px] sm:text-xs transition-all cursor-pointer flex items-center gap-1 sm:gap-1.5 ${
+                billingCycle === 'yearly'
+                  ? 'bg-slate-900 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <span>Yearly Billing</span>
+              <span className="bg-sky-400 text-slate-900 text-[9px] sm:text-[10px] font-black px-1 sm:px-1.5 py-0.5 rounded border border-slate-900">
+                10% OFF
+              </span>
             </button>
           </div>
         </div>
 
-        {/* Content - Enhanced */}
-        <div className="p-6 md:p-8 space-y-8">
-          {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-5 py-4 rounded-xl text-sm flex items-start gap-3">
-              <div className="w-5 h-5 mt-0.5 text-red-500 flex-shrink-0">
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-              </div>
-              <div className="flex-1">
-                <p className="font-semibold mb-1">Error</p>
-                <p className="text-red-600">{error}</p>
-              </div>
-            </div>
-          )}
+        {/* Plans Container - Scrollable area with min-h-0 so flexbox doesn't squish child items */}
+        <div className="flex-1 min-h-0 overflow-y-auto p-3.5 sm:p-6">
+          <div className={`flex flex-col sm:grid sm:grid-cols-2 ${plans.length === 3 ? 'lg:grid-cols-3 max-w-4xl mx-auto' : 'lg:grid-cols-4'} gap-4 sm:gap-5 w-full`}>
+            {plans.map((plan) => {
+              const originalDisplayPrice = billingCycle === 'yearly' ? plan.yearlyMonthlyPrice : plan.monthlyPrice;
+              const displayPrice = discountPercent > 0 && originalDisplayPrice > 0
+                ? Math.round(originalDisplayPrice * (1 - discountPercent / 100))
+                : originalDisplayPrice;
+              const isCurrent = normalizedCurrentPlan === plan.id;
+              const isLoadingThis = loadingPlanId === plan.id;
 
-          {isManualPayment ? (
-            <div className="space-y-6">
-              <div className="bg-gradient-to-br from-slate-50 to-blue-50 p-8 rounded-2xl border border-slate-200">
-                <h3 className="text-xl font-bold text-slate-900 mb-6 flex items-center gap-2">
-                  <CreditCard size={24} className="text-blue-600" />
-                  Payment Details
-                </h3>
-                
-                <div className="space-y-6">
-                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center pb-6 border-b border-slate-200">
-                    <span className="text-slate-600 font-medium text-lg">Amount to Pay</span>
-                    <span className="text-4xl font-black text-slate-900 mt-2 md:mt-0">
-                      {manualPaymentData.currency === 'USD' ? '$' : '₹'}{manualPaymentData.amount}
-                    </span>
+              return (
+                <div
+                  key={plan.id}
+                  className={`w-full shrink-0 flex flex-col justify-between bg-white border-2 border-slate-900 rounded-xl overflow-hidden transition-all min-h-[280px] ${
+                    isCurrent
+                      ? 'ring-2 ring-sky-400 shadow-[4px_4px_0px_0px_rgba(56,189,248,1)] sm:shadow-[6px_6px_0px_0px_rgba(56,189,248,1)] bg-sky-50/10'
+                      : plan.popular
+                      ? 'shadow-[4px_4px_0px_0px_rgba(56,189,248,1)] sm:shadow-[6px_6px_0px_0px_rgba(56,189,248,1)] bg-sky-50/20'
+                      : 'shadow-[3px_3px_0px_0px_rgba(15,23,42,1)] sm:shadow-[5px_5px_0px_0px_rgba(15,23,42,1)]'
+                  }`}
+                >
+                  {/* Popular / Active Badge */}
+                  {plan.popular && !isCurrent && (
+                    <div className="bg-sky-400 text-slate-900 font-black text-[10px] sm:text-[11px] tracking-wider uppercase text-center py-1.5 border-b-2 border-slate-900 flex items-center justify-center gap-1 shrink-0">
+                      <Crown size={13} className="shrink-0" /> MOST POPULAR
+                    </div>
+                  )}
+                  {isCurrent && (
+                    <div className="bg-emerald-400 text-slate-900 font-black text-[10px] sm:text-[11px] tracking-wider uppercase text-center py-1.5 border-b-2 border-slate-900 flex items-center justify-center gap-1 shrink-0">
+                      ✓ ACTIVE PLAN
+                    </div>
+                  )}
+
+                  <div className="p-4 sm:p-5 flex-1 flex flex-col">
+                    {/* Plan Name & Tagline */}
+                    <div className="flex items-center justify-between gap-1 mb-1">
+                      <h3 className="font-black text-lg sm:text-xl text-slate-900 tracking-tight">{plan.name}</h3>
+                      {discountPercent > 0 && originalDisplayPrice > 0 && (
+                        <span className="bg-emerald-100 text-emerald-900 text-[10px] font-black px-2 py-0.5 rounded border border-emerald-600 shrink-0">
+                          -{discountPercent}% OFF
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-600 font-medium mb-3 leading-relaxed">
+                      {plan.tagline}
+                    </p>
+
+                    {/* Price Block */}
+                    <div className="py-3 border-y border-slate-200 mb-4">
+                      <div className="flex items-baseline gap-1.5 flex-wrap">
+                        {discountPercent > 0 && originalDisplayPrice > 0 ? (
+                          <>
+                            <span className="line-through text-slate-400 font-extrabold text-lg sm:text-xl">
+                              ₹{originalDisplayPrice.toLocaleString('en-IN')}
+                            </span>
+                            <span className="text-2xl sm:text-3xl font-black text-emerald-600">
+                              ₹{displayPrice.toLocaleString('en-IN')}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-2xl sm:text-3xl font-black text-slate-900">
+                            ₹{displayPrice.toLocaleString('en-IN')}
+                          </span>
+                        )}
+                        <span className="text-xs font-bold text-slate-500">/month</span>
+                      </div>
+
+                      {billingCycle === 'yearly' && plan.yearlyTotal > 0 && (
+                        <p className="text-[10px] text-sky-700 font-bold mt-1">
+                          {discountPercent > 0 ? (
+                            <span>Discounted annual rate: ₹{Math.round(plan.yearlyTotal * (1 - discountPercent / 100)).toLocaleString('en-IN')}/yr</span>
+                          ) : (
+                            <span>Billed annually at ₹{plan.yearlyTotal.toLocaleString('en-IN')}/yr</span>
+                          )}
+                        </p>
+                      )}
+                      {billingCycle === 'monthly' && plan.monthlyPrice > 0 && (
+                        <p className="text-[10px] text-slate-500 font-semibold mt-1">
+                          Flexible monthly subscription
+                        </p>
+                      )}
+                      {plan.monthlyPrice === 0 && (
+                        <p className="text-[10px] text-emerald-600 font-bold mt-1">
+                          Always 100% Free
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Feature Checklist */}
+                    <div className="space-y-2 mb-4 flex-1">
+                      {plan.features.map((feature, i) => (
+                        <div key={i} className="flex items-start gap-2 text-xs font-semibold text-slate-800">
+                          <span className="w-4 h-4 rounded-full bg-slate-900 text-white flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">
+                            ✓
+                          </span>
+                          <span className="leading-tight">{feature}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
 
-                  {manualPaymentData.upiId && (
-                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-                      <label className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3 block">UPI ID</label>
-                      <div className="flex items-center gap-3">
-                        <code className="bg-slate-50 px-4 py-3 rounded-lg border border-slate-300 flex-1 font-mono text-lg text-slate-800">
-                          {manualPaymentData.upiId}
-                        </code>
-                        <button 
-                          onClick={() => navigator.clipboard.writeText(manualPaymentData.upiId!)}
-                          className="p-3 bg-blue-600 text-white hover:bg-blue-700 rounded-lg transition-all duration-200 hover:scale-105 shadow-md"
-                          title="Copy UPI ID"
-                        >
-                          <Copy size={20} />
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {manualPaymentData.paypalUsername && (
-                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-                      <label className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3 block">PayPal</label>
-                      <div className="text-slate-900 font-bold text-lg">
-                        Send to: {manualPaymentData.paypalUsername}
-                      </div>
-                    </div>
-                  )}
+                  {/* Card Footer Action Button */}
+                  <div className="p-4 sm:p-5 pt-0 mt-auto shrink-0">
+                    {isCurrent ? (
+                      <button
+                        disabled
+                        className="w-full py-2.5 bg-slate-100 text-slate-500 font-extrabold text-xs rounded-xl border-2 border-slate-300 cursor-not-allowed text-center uppercase"
+                      >
+                        CURRENT PLAN
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleUpgrade(plan.id)}
+                        disabled={isLoadingThis}
+                        className={`w-full py-2.5 px-3 font-black text-xs rounded-xl border-2 border-slate-900 transition-all flex items-center justify-center gap-1.5 uppercase shadow-[3px_3px_0px_0px_rgba(15,23,42,1)] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none whitespace-nowrap cursor-pointer ${
+                          discountPercent === 100
+                            ? 'bg-emerald-400 hover:bg-emerald-300 text-slate-900'
+                            : plan.popular
+                            ? 'bg-sky-400 hover:bg-sky-300 text-slate-900'
+                            : 'bg-slate-900 hover:bg-slate-800 text-white'
+                        }`}
+                      >
+                        {isLoadingThis ? (
+                          <>
+                            <Loader2 size={15} className="animate-spin" />
+                            <span>ACTIVATING...</span>
+                          </>
+                        ) : (
+                          <>
+                            <span>{discountPercent === 100 ? 'CLAIM 100% FREE' : plan.buttonText}</span>
+                            <ArrowUpRight size={15} className="shrink-0" />
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
+              );
+            })}
+          </div>
+        </div>
 
-              <div className="bg-blue-50 border border-blue-200 p-6 rounded-2xl">
-                <p className="text-slate-700 text-center leading-relaxed">
-                  After completing the payment, click the button below to activate your subscription. 
-                  We'll verify your payment shortly!
-                </p>
-              </div>
+        {/* Promo Code Input Bar Below Plans */}
+        <div className="bg-slate-100/90 px-3.5 sm:px-6 py-2.5 sm:py-3 border-t-2 border-slate-900 flex flex-col sm:flex-row justify-center items-center gap-2 shrink-0">
+          {appliedCoupon ? (
+            <div className="flex items-center gap-2 bg-emerald-100 border-2 border-emerald-700 text-emerald-900 px-3 py-1.5 rounded-xl font-bold text-xs shadow-[2px_2px_0px_0px_rgba(4,120,87,1)] w-full sm:w-auto justify-between">
+              <span className="flex items-center gap-1.5">
+                <Tag size={14} className="text-emerald-700 shrink-0" />
+                <span>Coupon <strong>{appliedCoupon}</strong> (-{discountPercent}% OFF)</span>
+              </span>
+              <button
+                onClick={handleRemoveCoupon}
+                className="ml-2 text-xs font-black text-emerald-900 hover:text-red-600 bg-white rounded-full w-5 h-5 flex items-center justify-center border border-emerald-700 cursor-pointer shrink-0"
+                title="Remove coupon"
+              >
+                ✕
+              </button>
             </div>
           ) : (
-            <>
-              {/* Features Preview */}
-              <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 rounded-2xl p-6 border border-slate-200">
-                <h3 className="text-lg font-bold text-slate-900 mb-4">What you get with Pro:</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {[
-                    { icon: <Zap size={20} className="text-yellow-500" />, text: 'Unlimited Projects' },
-                    { icon: <Shield size={20} className="text-green-500" />, text: 'Priority Support' },
-                    { icon: <Users size={20} className="text-blue-500" />, text: 'Team Collaboration' },
-                    { icon: <BarChart3 size={20} className="text-purple-500" />, text: 'Advanced Analytics' }
-                  ].map((feature, i) => (
-                    <div key={i} className="flex items-center gap-3 bg-white p-3 rounded-xl border border-slate-200">
-                      {feature.icon}
-                      <span className="text-slate-700 font-medium">{feature.text}</span>
-                    </div>
-                  ))}
-                </div>
+            <div className="flex items-center gap-2 w-full max-w-md justify-center">
+              <div className="relative flex-1">
+                <Tag size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Promo code"
+                  value={couponCodeInput}
+                  onChange={(e) => {
+                    setCouponCodeInput(e.target.value);
+                    if (couponError) setCouponError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleApplyCoupon();
+                  }}
+                  className="w-full pl-8 pr-2 py-1.5 text-xs font-bold bg-white border-2 border-slate-900 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-400 placeholder:text-slate-400 placeholder:font-medium shadow-[2px_2px_0px_0px_rgba(15,23,42,1)]"
+                />
               </div>
-
-              {/* Currency Toggle - Styled */}
-              <div className="flex gap-2 bg-slate-100 p-1.5 rounded-xl w-fit mx-auto shadow-inner">
-                <button
-                  onClick={() => setSelectedCurrency('USD')}
-                  className={`px-8 py-3 rounded-lg font-semibold text-base transition-all duration-300 ${
-                    selectedCurrency === 'USD' 
-                      ? 'bg-white text-slate-900 shadow-lg scale-105' 
-                      : 'text-slate-600 hover:text-slate-800'
-                  }`}
-                >
-                  USD ($)
-                </button>
-                <button
-                  onClick={() => setSelectedCurrency('INR')}
-                  className={`px-8 py-3 rounded-lg font-semibold text-base transition-all duration-300 ${
-                    selectedCurrency === 'INR' 
-                      ? 'bg-white text-slate-900 shadow-lg scale-105' 
-                      : 'text-slate-600 hover:text-slate-800'
-                  }`}
-                >
-                  INR (₹)
-                </button>
-              </div>
-
-              {/* Plans - Enhanced Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {Object.entries(plans[selectedCurrency]).map(([key, plan]) => {
-                  const isSelected = selectedPlan === key;
-                  const isBestValue = key === '12_month';
-                  
-                  return (
-                    <button
-                      key={key}
-                      onClick={() => setSelectedPlan(key as any)}
-                      className={`relative p-8 rounded-2xl border-3 transition-all duration-300 ${
-                        isSelected
-                          ? 'border-blue-600 bg-gradient-to-br from-blue-50 to-indigo-50 shadow-2xl scale-105'
-                          : 'border-slate-200 bg-white hover:border-blue-300 hover:shadow-xl'
-                      }`}
-                    >
-                      {isBestValue && (
-                        <div className="absolute -top-4 left-1/2 transform -translate-x-1/2 z-10">
-                          <span className="bg-gradient-to-r from-green-500 to-emerald-500 text-white text-xs font-black px-4 py-1.5 rounded-full shadow-lg whitespace-nowrap">
-                            🔥 BEST VALUE
-                          </span>
-                        </div>
-                      )}
-                      <div className="text-center">
-                        <h3 className="font-black text-xl text-slate-900">{(plan as { name: string }).name || 'Plan'}</h3>
-
-                        <div className="mt-4">
-                          <span className="text-5xl font-black text-slate-900">
-                            {selectedCurrency === 'USD' ? '$' : '₹'}{(plan as { price: number })?.price || 0}
-                          </span>
-                          <span className="text-slate-500 text-lg ml-1">/plan</span>
-                        </div>
-                        <p className="text-sm text-slate-600 mt-3 bg-white/60 px-3 py-1 rounded-full inline-block">
-                          Unlimited projects
-                        </p>
-                      </div>
-                      {isSelected && (
-                        <div className="absolute top-6 right-6">
-                          <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-full p-2 shadow-lg">
-                            <Check size={18} className="text-white" />
-                          </div>
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Coupon Code - Enhanced */}
-              <div className="bg-gradient-to-r from-slate-50 to-slate-100 p-6 rounded-2xl border border-slate-200">
-                <label className="block text-sm font-bold text-slate-700 mb-4 flex items-center gap-2">
-                  ✨ Have a coupon code?
-                </label>
-                <div className="flex flex-col sm:flex-row gap-3">
-                  <input
-                    type="text"
-                    value={couponCode}
-                    onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
-                    placeholder="Enter code"
-                    className="flex-1 border-2 border-slate-300 rounded-xl px-5 py-3.5 text-base focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:outline-none transition-all bg-white"
-                  />
-                  <button
-                    onClick={handleApplyCoupon}
-                    className="px-6 py-3.5 bg-gradient-to-r from-slate-900 to-slate-800 text-white rounded-xl font-semibold hover:from-slate-800 hover:to-slate-700 transition-all shadow-lg hover:shadow-xl"
-                  >
-                    Apply
-                  </button>
-                </div>
-                {appliedCoupon && (
-                  <div className="mt-4 text-base text-green-700 font-bold flex items-center gap-2 bg-green-50 p-3 rounded-lg border border-green-200">
-                    <Check size={20} />
-                    Coupon "{appliedCoupon}" applied - {discount}% off! 🎉
-                  </div>
-                )}
-              </div>
-
-              {/* Price Summary - Enhanced */}
-              <div className="bg-white border-2 border-slate-200 rounded-2xl p-6 shadow-sm">
-                <h4 className="font-bold text-slate-900 mb-4 text-lg">Price Summary</h4>
-                <div className="space-y-3">
-                  <div className="flex justify-between items-center text-slate-600">
-                    <span className="text-base">Original Price</span>
-                    <span className="text-xl font-semibold">{selectedCurrency === 'USD' ? '$' : '₹'}{originalPrice}</span>
-                  </div>
-                  {discount > 0 && (
-                    <div className="flex justify-between items-center text-green-600 bg-green-50 p-3 rounded-lg">
-                      <span className="text-base font-semibold">Discount ({discount}%)</span>
-                      <span className="text-xl font-bold">-{selectedCurrency === 'USD' ? '$' : '₹'}{originalPrice - finalPrice}</span>
-                    </div>
-                  )}
-                  <div className="h-px bg-slate-200 my-2"></div>
-                  <div className="flex justify-between items-center text-3xl font-black text-slate-900">
-                    <span>Total</span>
-                    <span className="bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
-                      {selectedCurrency === 'USD' ? '$' : '₹'}{finalPrice}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </>
+              <button
+                onClick={() => handleApplyCoupon()}
+                className="bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs px-4 py-1.5 rounded-xl border-2 border-slate-900 transition-all shadow-[2px_2px_0px_0px_rgba(15,23,42,1)] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none shrink-0 cursor-pointer"
+              >
+                Apply
+              </button>
+            </div>
           )}
-
-          {/* Subscribe Button - Enhanced */}
-          <button
-            onClick={isManualPayment ? handleManualVerify : handleSubscribe}
-            disabled={loading}
-            className="w-full flex items-center justify-center gap-3 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-700 hover:via-indigo-700 hover:to-purple-700 text-white px-8 py-5 rounded-2xl font-black text-xl shadow-2xl hover:shadow-3xl transition-all duration-300 hover:scale-[1.02] disabled:opacity-50 disabled:hover:scale-100"
-          >
-            {loading ? (
-              <>
-                <Loader2 size={24} className="animate-spin" />
-                Processing...
-              </>
-            ) : (
-              <>
-                {isManualPayment ? <Check size={24} /> : <CreditCard size={24} />}
-                {isManualPayment ? 'I Have Made the Payment' : 'Subscribe Now'}
-                {!isManualPayment && <ArrowRight size={24} />}
-              </>
-            )}
-          </button>
-
-          {!isManualPayment && <p className="text-center text-slate-500 text-sm pt-2">
-            🔒 Secure payment powered by Razorpay. Cancel anytime.
-          </p>}
         </div>
+
+        {/* Feedback Alert for Coupons */}
+        {couponError && (
+          <div className="bg-red-100 border-t border-b-2 border-slate-900 px-4 py-1.5 text-xs font-extrabold text-red-800 flex items-center gap-1.5 shrink-0 justify-center text-center">
+            <AlertCircle size={14} className="shrink-0" />
+            <span>{couponError}</span>
+          </div>
+        )}
+        {couponSuccess && (
+          <div className="bg-emerald-100 border-t border-b-2 border-slate-900 px-4 py-1.5 text-xs font-extrabold text-emerald-900 flex items-center gap-1.5 shrink-0 justify-center text-center">
+            <Check size={14} className="shrink-0" />
+            <span>{couponSuccess}</span>
+          </div>
+        )}
+
+        {/* Footer */}
+        <div className="bg-white border-t-2 border-slate-900 px-4 sm:px-6 py-2.5 sm:py-3 flex flex-col md:flex-row justify-between items-center text-[10px] sm:text-[11px] text-slate-600 font-semibold gap-1.5 shrink-0 text-center md:text-left">
+          <div className="flex items-center justify-center gap-1.5">
+            <Shield size={14} className="text-emerald-600 shrink-0 sm:w-4 sm:h-4" />
+            <span>🔒 Secure checkout powered by Razorpay. Official invoice provided.</span>
+          </div>
+          <p className="text-slate-500">Need custom enterprise plan? Email divyanshgupta4949@gmail.com</p>
+        </div>
+
       </div>
     </div>
   );

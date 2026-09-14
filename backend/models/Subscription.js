@@ -13,27 +13,24 @@ const subscriptionSchema = new mongoose.Schema({
   },
   plan: {
     type: String,
-    enum: ['1_month', '6_month', '12_month'],
-    required: true
+    required: true,
+    default: 'free'
   },
   currency: {
     type: String,
-    enum: ['USD', 'INR'],
-    required: true
+    default: 'INR'
   },
   amount: {
     type: Number,
-    required: true
+    default: 0
   },
   status: {
     type: String,
-    enum: ['pending', 'active', 'expired', 'cancelled', 'pending_verification', 'rejected'],
-    default: 'pending'
+    default: 'active'
   },
   paymentMethod: {
     type: String,
-    enum: ['razorpay', 'paypal', 'upi', 'auto_approved', 'manual'],
-    required: true
+    default: 'auto_approved'
   },
   paymentId: String,
   orderId: String,

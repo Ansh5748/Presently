@@ -1,4 +1,4 @@
-﻿import type {
+import type {
   AnnotationIssue,
   AnnotationIssueStatus,
   AnnotationMessage,
@@ -562,10 +562,19 @@ export const ApiService = {
     return result;
   },
 
-  async getSubscriptionStatus() {
+  invalidateSubscriptionCache() {
+    CacheService.invalidatePrefix('presently:subscription');
+  },
+
+  async getSubscriptionStatus(forceRefresh = false) {
     const key = CACHE_KEYS.SUBSCRIPTION_STATUS(
       CacheService.userId()
     );
+
+    if (forceRefresh) {
+      CacheService.invalidate(key);
+      CacheService.invalidatePrefix('presently:subscription');
+    }
 
     return getCachedOrFetch(
       key,

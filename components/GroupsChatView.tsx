@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
-import { MessageCircle, Hash, Users, Building2, ChevronDown, ChevronRight, Menu, Send, Eye, Shield, Settings, Plus, UserCircle, ArrowLeft, ChevronUp, X, Pencil, Save, Loader2 } from 'lucide-react';
+import { MessageCircle, Hash, Users, Building2, ChevronDown, ChevronRight, Menu, Send, Eye, Shield, Settings, Plus, UserCircle, ArrowLeft, ChevronUp, X, Pencil, Save, Loader2, Trash2, CheckSquare, Square, ListCheck } from 'lucide-react';
 import { ApiService } from '../services/apiService';
 import { GroupManagementModal } from './GroupManagementModal';
 import type { Group, ChatMessage, Subgroup, UserSearchResult, UserProfile } from '../types';
@@ -87,8 +87,90 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
   const [target, setTarget] = useState<ChatTarget | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
+  const [deletingMessages, setDeletingMessages] = useState(false);
+
+  const toggleSelectMessage = (id: string) => {
+    setSelectedMessageIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAllMessages = () => {
+    const allIds = messages.map(m => m.id || (m as any)._id).filter(Boolean);
+    setSelectedMessageIds(new Set(allIds));
+  };
+
+  const clearSelection = () => {
+    setSelectedMessageIds(new Set());
+    setSelectionMode(false);
+  };
+
+  const handleDeleteSelected = async () => {
+    if (selectedMessageIds.size === 0) return;
+    if (!window.confirm(`Are you sure you want to delete ${selectedMessageIds.size} selected message(s)?`)) return;
+
+    setDeletingMessages(true);
+    try {
+      const ids = Array.from(selectedMessageIds);
+      const user = getStoredUser();
+      const token = (JSON.parse(localStorage.getItem('presently_user') || '{}')).accessToken || '';
+      const apiUrl = import.meta.env.VITE_API_URL || '/api';
+
+      const res = await fetch(`${apiUrl}/messages/delete-batch`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ messageIds: ids })
+      });
+
+      if (res.ok) {
+        setMessages(prev => prev.filter(m => !selectedMessageIds.has(m.id) && !selectedMessageIds.has((m as any)._id)));
+        setSelectedMessageIds(new Set());
+        setSelectionMode(false);
+      }
+    } catch (err) {
+      console.error('Failed to delete messages:', err);
+    } finally {
+      setDeletingMessages(false);
+    }
+  };
+
+  const handleDeleteSingleMessage = async (msgId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!window.confirm('Are you sure you want to delete this message?')) return;
+
+    try {
+      const token = (JSON.parse(localStorage.getItem('presently_user') || '{}')).accessToken || '';
+      const apiUrl = import.meta.env.VITE_API_URL || '/api';
+
+      const res = await fetch(`${apiUrl}/messages/${msgId}`, {
+        method: 'DELETE',
+        headers: {
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        }
+      });
+
+      if (res.ok) {
+        setMessages(prev => prev.filter(m => m.id !== msgId && (m as any)._id !== msgId));
+        setSelectedMessageIds(prev => {
+          const next = new Set(prev);
+          next.delete(msgId);
+          return next;
+        });
+      }
+    } catch (err) {
+      console.error('Failed to delete message:', err);
+    }
+  };
+
   const [messageText, setMessageText] = useState('');
-  // Visibility selection removed: group messages are scoped to the group by default
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
@@ -1281,38 +1363,78 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
         ) : (
           <>
             {/* Header */}
-            <div className="px-4 sm:px-6 py-3 border-b bg-white flex items-center gap-3 flex-shrink-0 min-w-0">
-              {target.kind === 'group' ? (
-                <>
-                  <Hash className="w-5 h-5 text-slate-400" />
-                  <div>
-                    <div className="font-semibold text-slate-800">{target.groupName}</div>
-                    <div className="text-xs text-slate-500">
-                      {target.subgroupId ? 'Channel' : 'General channel'} · Anyone with access
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <>
-                  {(() => {
-                    const isSelf = target.recipientId === currentUserId;
-                    const recipientAvatar = isSelf
-                      ? getSelfAvatar() || dmUsers.find(u => u._id === target.recipientId)?.avatarUrl
-                      : dmUsers.find(u => u._id === target.recipientId)?.avatarUrl;
-                    return recipientAvatar ? (
-                      <img src={recipientAvatar} alt={target.recipientName} className="w-9 h-9 rounded-full object-cover" />
-                    ) : (
-                      <div className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-400 to-purple-500 text-white text-sm font-semibold flex items-center justify-center">
-                        {target.recipientName.charAt(0).toUpperCase()}
+            <div className="px-4 sm:px-6 py-3 border-b bg-white flex items-center justify-between gap-3 shrink-0 min-w-0">
+              <div className="flex items-center gap-3 min-w-0">
+                {target.kind === 'group' ? (
+                  <>
+                    <Hash className="w-5 h-5 text-slate-400 shrink-0" />
+                    <div className="min-w-0">
+                      <div className="font-semibold text-slate-800 truncate">{target.groupName}</div>
+                      <div className="text-xs text-slate-500 truncate">
+                        {target.subgroupId ? 'Channel' : 'General channel'} · Anyone with access
                       </div>
-                    );
-                  })()}
-                  <div>
-                    <div className="font-semibold text-slate-800">{target.recipientName}</div>
-                    <div className="text-xs text-slate-500">{target.recipientEmail} · Direct message</div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {(() => {
+                      const isSelf = target.recipientId === currentUserId;
+                      const recipientAvatar = isSelf
+                        ? getSelfAvatar() || dmUsers.find(u => u._id === target.recipientId)?.avatarUrl
+                        : dmUsers.find(u => u._id === target.recipientId)?.avatarUrl;
+                      return recipientAvatar ? (
+                        <img src={recipientAvatar} alt={target.recipientName} className="w-9 h-9 rounded-full object-cover shrink-0" />
+                      ) : (
+                        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-400 to-purple-500 text-white text-sm font-semibold flex items-center justify-center shrink-0">
+                          {target.recipientName.charAt(0).toUpperCase()}
+                        </div>
+                      );
+                    })()}
+                    <div className="min-w-0">
+                      <div className="font-semibold text-slate-800 truncate">{target.recipientName}</div>
+                      <div className="text-xs text-slate-500 truncate">{target.recipientEmail} · Direct message</div>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Selection / Delete Header Controls */}
+              <div className="shrink-0 flex items-center gap-2">
+                {selectionMode ? (
+                  <div className="flex items-center gap-2 bg-indigo-50 border border-indigo-200 px-3 py-1.5 rounded-xl text-xs">
+                    <span className="font-bold text-indigo-900">{selectedMessageIds.size} selected</span>
+                    <button
+                      onClick={selectAllMessages}
+                      className="text-indigo-700 hover:text-indigo-900 font-semibold px-2 py-0.5 rounded hover:bg-indigo-100 transition cursor-pointer"
+                    >
+                      Select All
+                    </button>
+                    <button
+                      onClick={handleDeleteSelected}
+                      disabled={selectedMessageIds.size === 0 || deletingMessages}
+                      className="bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-bold px-2.5 py-1 rounded-lg transition flex items-center gap-1 shrink-0 cursor-pointer"
+                    >
+                      {deletingMessages ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                      <span>Delete ({selectedMessageIds.size})</span>
+                    </button>
+                    <button
+                      onClick={clearSelection}
+                      className="text-slate-500 hover:text-slate-700 font-semibold px-1.5 py-0.5 rounded hover:bg-slate-200 transition cursor-pointer"
+                    >
+                      Cancel
+                    </button>
                   </div>
-                </>
-              )}
+                ) : (
+                  <button
+                    onClick={() => setSelectionMode(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-100 text-xs font-semibold transition cursor-pointer shadow-xs"
+                    title="Select messages to delete"
+                  >
+                    <ListCheck className="w-4 h-4 text-slate-500" />
+                    <span className="hidden sm:inline">Select Messages</span>
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Messages */}
@@ -1337,13 +1459,15 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
                 </div>
               )}
               {messages.map((m, index) => {
+                const msgId = m.id || (m as any)._id;
                 const mine = (typeof m.senderId === 'object' ? m.senderId._id : m.senderId) === currentUserId;
+                const isSelected = selectedMessageIds.has(msgId);
                 const currentDate = formatDateHeader(m.createdAt);
                 const prevDate = index > 0 ? formatDateHeader(messages[index - 1].createdAt) : null;
                 const showDateHeader = currentDate && currentDate !== prevDate;
 
                 return (
-                  <React.Fragment key={m.id}>
+                  <React.Fragment key={msgId}>
                     {showDateHeader && (
                       <div className="w-full text-left my-2.5 pl-1 select-none">
                         <span className="inline-block px-2.5 py-1 rounded-md bg-slate-200/80 text-slate-600 text-[11px] font-semibold tracking-wide">
@@ -1351,15 +1475,46 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
                         </span>
                       </div>
                     )}
-                    <div className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
+                    <div
+                      onClick={() => selectionMode && toggleSelectMessage(msgId)}
+                      className={`group flex items-start gap-2.5 ${mine ? 'justify-end' : 'justify-start'} ${selectionMode ? 'cursor-pointer' : ''}`}
+                    >
+                      {selectionMode && (
+                        <div className="pt-2 shrink-0">
+                          {isSelected ? (
+                            <CheckSquare className="w-4 h-4 text-indigo-600" />
+                          ) : (
+                            <Square className="w-4 h-4 text-slate-400" />
+                          )}
+                        </div>
+                      )}
+
                       <div className={`max-w-[85%] sm:max-w-[70%] ${mine ? 'items-end' : 'items-start'} flex flex-col min-w-0`}>
                         <div className={`flex items-center gap-2 text-xs text-slate-500 mb-1 ${mine ? 'flex-row-reverse' : ''}`}>
                           <span className="font-medium text-slate-600">{getSenderName(m.senderId)}</span>
                           <span>{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                          {/* team-only visibility removed from group chat UI */}
                         </div>
-                        <div className={`px-4 py-2.5 rounded-2xl ${mine ? 'bg-indigo-600 text-white rounded-br-md' : 'bg-white border border-slate-200 text-slate-700 rounded-bl-md shadow-sm'}`}>
-                          {m.content}
+
+                        <div className="relative group/bubble flex items-center gap-1.5">
+                          {!selectionMode && (
+                            <button
+                              onClick={(e) => handleDeleteSingleMessage(msgId, e)}
+                              className={`opacity-0 group-hover/bubble:opacity-100 p-1 rounded hover:bg-slate-200 text-slate-400 hover:text-red-600 transition shrink-0 ${mine ? 'order-first' : 'order-last'}`}
+                              title="Delete message"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+
+                          <div className={`px-4 py-2.5 rounded-2xl ${
+                            isSelected
+                              ? 'ring-2 ring-indigo-500 bg-indigo-50 text-indigo-900'
+                              : mine
+                              ? 'bg-indigo-600 text-white rounded-br-md'
+                              : 'bg-white border border-slate-200 text-slate-700 rounded-bl-md shadow-sm'
+                          }`}>
+                            {m.content}
+                          </div>
                         </div>
                       </div>
                     </div>
