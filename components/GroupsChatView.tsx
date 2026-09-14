@@ -24,6 +24,35 @@ interface DMUser {
   lastMessageAt?: string;
 }
 
+const formatDateHeader = (dateInput: string | number | Date): string => {
+  if (!dateInput) return '';
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return '';
+  const now = new Date();
+
+  const isToday =
+    d.getDate() === now.getDate() &&
+    d.getMonth() === now.getMonth() &&
+    d.getFullYear() === now.getFullYear();
+
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const isYesterday =
+    d.getDate() === yesterday.getDate() &&
+    d.getMonth() === yesterday.getMonth() &&
+    d.getFullYear() === yesterday.getFullYear();
+
+  if (isToday) return 'Today';
+  if (isYesterday) return 'Yesterday';
+
+  return d.toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined
+  });
+};
+
 export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavigate, path }) => {
   const getStoredUser = () => {
     try {
@@ -1307,24 +1336,34 @@ export const GroupsChatView: React.FC<GroupsChatViewProps> = ({ onClose, onNavig
                   No messages yet. Start the conversation!
                 </div>
               )}
-              {messages.map(m => {
+              {messages.map((m, index) => {
                 const mine = (typeof m.senderId === 'object' ? m.senderId._id : m.senderId) === currentUserId;
+                const currentDate = formatDateHeader(m.createdAt);
+                const prevDate = index > 0 ? formatDateHeader(messages[index - 1].createdAt) : null;
+                const showDateHeader = currentDate && currentDate !== prevDate;
+
                 return (
-                  <div
-                    key={m.id}
-                    className={`flex ${mine ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <div className={`max-w-[85%] sm:max-w-[70%] ${mine ? 'items-end' : 'items-start'} flex flex-col min-w-0`}>
-                      <div className={`flex items-center gap-2 text-xs text-slate-500 mb-1 ${mine ? 'flex-row-reverse' : ''}`}>
-                        <span className="font-medium text-slate-600">{getSenderName(m.senderId)}</span>
-                        <span>{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                        {/* team-only visibility removed from group chat UI */}
+                  <React.Fragment key={m.id}>
+                    {showDateHeader && (
+                      <div className="w-full text-left my-2.5 pl-1 select-none">
+                        <span className="inline-block px-2.5 py-1 rounded-md bg-slate-200/80 text-slate-600 text-[11px] font-semibold tracking-wide">
+                          {currentDate}
+                        </span>
                       </div>
-                      <div className={`px-4 py-2.5 rounded-2xl ${mine ? 'bg-indigo-600 text-white rounded-br-md' : 'bg-white border border-slate-200 text-slate-700 rounded-bl-md shadow-sm'}`}>
-                        {m.content}
+                    )}
+                    <div className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[85%] sm:max-w-[70%] ${mine ? 'items-end' : 'items-start'} flex flex-col min-w-0`}>
+                        <div className={`flex items-center gap-2 text-xs text-slate-500 mb-1 ${mine ? 'flex-row-reverse' : ''}`}>
+                          <span className="font-medium text-slate-600">{getSenderName(m.senderId)}</span>
+                          <span>{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                          {/* team-only visibility removed from group chat UI */}
+                        </div>
+                        <div className={`px-4 py-2.5 rounded-2xl ${mine ? 'bg-indigo-600 text-white rounded-br-md' : 'bg-white border border-slate-200 text-slate-700 rounded-bl-md shadow-sm'}`}>
+                          {m.content}
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  </React.Fragment>
                 );
               })}
               <div ref={messagesEndRef} />
