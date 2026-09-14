@@ -135,6 +135,24 @@ export const CacheService = {
         serialized
       );
     } catch {
+      // Quota exceeded: Evict all presently: API cache keys from localStorage
+      try {
+        const keysToRemove: string[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith('presently:')) {
+            keysToRemove.push(k);
+          }
+        }
+        keysToRemove.forEach(k => localStorage.removeItem(k));
+        // Retry setting current item after clearing cache
+        const serialized = JSON.stringify(entry);
+        if (serialized.length <= MAX_LOCALSTORAGE_BYTES) {
+          localStorage.setItem(key, serialized);
+        }
+      } catch {
+        // Fall back gracefully; memory cache remains available
+      }
     }
   },
 

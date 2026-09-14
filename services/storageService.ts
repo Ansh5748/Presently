@@ -10,19 +10,65 @@ const STORAGE_KEYS = {
 const generateId = () => Math.random().toString(36).substr(2, 9);
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Helper to clear non-essential API cache from localStorage when quota is tight
+const clearApiCacheFromLocalStorage = () => {
+  try {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && (key.startsWith('presently:') || key.startsWith('presently_projects_published_'))) {
+        keysToRemove.push(key);
+      }
+    }
+    keysToRemove.forEach(key => localStorage.removeItem(key));
+  } catch (e) {
+    console.warn('[StorageService] Failed to clear API cache:', e);
+  }
+};
+
+const safeSetLocalStorage = (key: string, value: string) => {
+  try {
+    localStorage.setItem(key, value);
+  } catch (e) {
+    console.warn(`[StorageService] Initial setItem for ${key} failed, attempting cache cleanup...`, e);
+    // Quota exceeded: Evict non-essential API cache and published snapshots
+    clearApiCacheFromLocalStorage();
+    try {
+      localStorage.setItem(key, value);
+    } catch (retryError) {
+      console.error(`[StorageService] Retry setItem for ${key} failed:`, retryError);
+      // Fallback to sessionStorage for user session if localStorage is completely blocked
+      if (key === STORAGE_KEYS.USER) {
+        try {
+          sessionStorage.setItem(key, value);
+        } catch (sessionErr) {
+          console.error('[StorageService] SessionStorage fallback also failed:', sessionErr);
+        }
+      }
+    }
+  }
+};
+
 export const StorageService = {
   // --- User Management ---
   saveUser: (user: { id: string; name: string; email: string; accessToken: string }) => {
-    localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+    safeSetLocalStorage(STORAGE_KEYS.USER, JSON.stringify(user));
   },
 
   getUser: (): { id: string; name: string; email: string; accessToken: string } | null => {
-    const data = localStorage.getItem(STORAGE_KEYS.USER);
-    return data ? JSON.parse(data) : null;
+    try {
+      const data = localStorage.getItem(STORAGE_KEYS.USER) || sessionStorage.getItem(STORAGE_KEYS.USER);
+      return data ? JSON.parse(data) : null;
+    } catch {
+      return null;
+    }
   },
 
   clearUser: () => {
-    localStorage.removeItem(STORAGE_KEYS.USER);
+    try {
+      localStorage.removeItem(STORAGE_KEYS.USER);
+      sessionStorage.removeItem(STORAGE_KEYS.USER);
+    } catch {}
   },
 
   // --- Project Management (Now User-Aware) ---
