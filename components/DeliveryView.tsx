@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { StorageService } from '../services/storageService';
 import { ApiService } from '../services/apiService';
-import { Project, Pin, ProjectPage, AnnotationIssue } from '../types';
-import { Loader2, Layout, MessageSquare, Monitor, Smartphone, SlidersHorizontal, Search, X, AlertCircle, ChevronDown, Maximize2 } from 'lucide-react';
+import { Project, Pin, AnnotationIssue } from '../types';
+import { Loader2, Layout, MessageSquare, Monitor, Smartphone, SlidersHorizontal, Search, X, AlertCircle, Maximize2 } from 'lucide-react';
 import { AnnotationIssueModal } from './AnnotationIssueModal';
 
 const SPECIAL_EMAILS = ['guptadivyansh2707@gmail.com'];
@@ -26,7 +26,11 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
   const [pins, setPins] = useState<Pin[]>([]);
   const [activePinId, setActivePinId] = useState<string | null>(null);
   const [activePageId, setActivePageId] = useState<string | null>(null);
+  const [loadedPageCount, setLoadedPageCount] = useState<number>(1);
+  const [isImageLoaded, setIsImageLoaded] = useState<boolean>(false);
   const [loading, setLoading] = useState(true);
+  const [projectFetchCompleted, setProjectFetchCompleted] = useState(false);
+
   const [isEditingDetails, setIsEditingDetails] = useState(false);
   const [viewMode, setViewMode] = useState<'desktop' | 'mobile'>(() => {
     if (typeof window === 'undefined') return 'desktop';
@@ -37,7 +41,48 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
 
     return 'desktop';
   });
+
+  const deliveryImageRef = useRef<HTMLImageElement | null>(null);
+
+  const handleDeliveryImageRef = (img: HTMLImageElement | null) => {
+    deliveryImageRef.current = img;
+    if (img && img.complete && img.naturalWidth > 0) {
+      setIsImageLoaded(true);
+    }
+  };
+
+  // Reset main image loading state when active page or view mode changes
+  useEffect(() => {
+    setIsImageLoaded(false);
+    if (deliveryImageRef.current && deliveryImageRef.current.complete && deliveryImageRef.current.naturalWidth > 0) {
+      setIsImageLoaded(true);
+    }
+  }, [activePageId, viewMode]);
+
   const imageContainerRef = useRef<HTMLDivElement>(null);
+
+  // Helper to select page and force its load if not yet in set
+  const handleSelectPage = (pageId: string) => {
+    setActivePageId(pageId);
+    if (project?.pages) {
+      const idx = project.pages.findIndex(p => p.id === pageId);
+      if (idx !== -1 && idx >= loadedPageCount) {
+        setLoadedPageCount(prev => Math.max(prev, idx + 1));
+      }
+    }
+  };
+
+  // Progressive batch-loading effect for secondary pages (loads in background sets of 3)
+  useEffect(() => {
+    if (!project?.pages || project.pages.length <= 1) return;
+    if (loadedPageCount >= project.pages.length) return;
+
+    const timer = setTimeout(() => {
+      setLoadedPageCount(prev => Math.min(project.pages.length, prev + 3));
+    }, 150);
+
+    return () => clearTimeout(timer);
+  }, [project?.pages?.length, loadedPageCount]);
 
   const [currentUserId, setCurrentUserId] = useState<string>('');
   const [isGroupMember, setIsGroupMember] = useState(false);
@@ -258,6 +303,7 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
       }
     } finally {
       setLoading(false);
+      setProjectFetchCompleted(true);
     }
   };
 
@@ -460,7 +506,7 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
     if (!targetPin) return;
 
     if (targetPin.pageId && targetPin.pageId !== activePageId) {
-      setActivePageId(targetPin.pageId);
+      handleSelectPage(targetPin.pageId);
     }
     const pinDevice = normalizePinDevice(targetPin.device);
     if (pinDevice !== viewMode) {
@@ -547,15 +593,7 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
     ? pageSlug
     : `${websiteUrl || ''}/${pageSlug}`;
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen bg-slate-50">
-        <Loader2 size={48} className="animate-spin text-slate-400" />
-      </div>
-    );
-  }
-
-  if (!project) {
+  if (projectFetchCompleted && !project) {
     return (
       <div className="flex items-center justify-center h-screen bg-slate-50">
         <div className="text-center">
@@ -566,14 +604,18 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
     );
   }
 
-  const isWorkingMode = project.mode === 'working';
+  const isWorkingMode = project?.mode === 'working';
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans flex flex-col">
       <nav className="bg-white border-b border-slate-200 sticky top-0 z-30 px-4 md:px-6 py-3 md:py-4 flex justify-between items-center shadow-sm flex-none">
         <div className="flex items-center gap-3 flex-1 min-w-0 flex-wrap md:flex-nowrap">
           <div className="h-8 md:h-6 w-px bg-slate-200 shrink-0"></div>
-          <span className="font-semibold text-slate-900 truncate">{project.name}</span>
+          {project ? (
+            <span className="font-semibold text-slate-900 truncate">{project.name}</span>
+          ) : (
+            <span className="inline-block w-28 h-5 bg-slate-200 animate-pulse rounded"></span>
+          )}
           <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-full border ${isLiveView ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
             {isLiveView ? 'Live' : 'Draft'}
           </span>
@@ -587,7 +629,7 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
           )}
         </div>
         <div className="hidden md:block text-sm text-slate-500 text-right pr-4">
-          Prepared for <span className="font-semibold text-slate-900">{project.clientName || 'Client'}</span>
+          Prepared for <span className="font-semibold text-slate-900">{project?.clientName || 'Client'}</span>
         </div>
         <div className="flex items-center gap-2">
           {isWorkingMode && (
@@ -631,18 +673,24 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
               <Layout size={14} /> Screens
             </h3>
             <div className="flex flex-wrap gap-2">
-              {project.pages.map(page => (
-                <button
-                  key={page.id}
-                  onClick={() => setActivePageId(page.id)}
-                  className={`
-                    px-3 py-1.5 rounded-full text-sm font-medium transition-all
-                    ${activePageId === page.id ? 'bg-slate-900 text-white shadow-md' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}
-                  `}
-                >
-                  {page.name.length > 25 ? page.name.slice(0, 25) + '...' : page.name}
-                </button>
-              ))}
+              {!project ? (
+                [1, 2].map(i => (
+                  <div key={i} className="h-8 w-24 bg-slate-100 animate-pulse rounded-full"></div>
+                ))
+              ) : (
+                project.pages.map((page) => (
+                  <button
+                    key={page.id}
+                    onClick={() => handleSelectPage(page.id)}
+                    className={`
+                      px-3 py-1.5 rounded-full text-sm font-medium transition-all
+                      ${activePageId === page.id ? 'bg-slate-900 text-white shadow-md' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}
+                    `}
+                  >
+                    {page.name.length > 25 ? page.name.slice(0, 25) + '...' : page.name}
+                  </button>
+                ))
+              )}
             </div>
           </div>
 
@@ -688,68 +736,81 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
                 Notes for this screen
               </h3>
             </div>
-            <div className="divide-y divide-slate-100 overflow-y-auto">
-              {visiblePins.length === 0 && (
-                <div className="p-8 text-slate-400 text-center text-sm">No notes added for this screen.</div>
-              )}
-              {visiblePins.map(pin => {
-                const pinType = pin.type || 'issue';
-                const isIssueType = pinType === 'issue';
-                return (
-                  <div
-                    key={pin.id}
-                    className={`p-5 transition-colors hover:bg-slate-50 ${activePinId === pin.id ? 'bg-blue-50 border-l-4 border-blue-500' : ''}`}
-                  >
-                    <div className="flex items-start gap-3">
-                      <button
-                        onClick={() => { setActivePinId(activePinId === pin.id ? null : pin.id); scrollPinIntoView(pin); }}
-                        className="flex-shrink-0 cursor-pointer"
-                      >
-                        <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold mt-0.5 ${activePinId === pin.id ? 'bg-blue-600 text-white' : (pin.type && pin.type !== 'issue' ? 'bg-slate-500 text-white' : 'bg-slate-200 text-slate-600')}`}>
-                          {pin.number}
-                        </span>
-                      </button>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <button
-                            onClick={() => { setActivePinId(pin.id); scrollPinIntoView(pin); }}
-                            className={`font-semibold mb-1 text-left ${activePinId === pin.id ? 'text-blue-900' : 'text-slate-800'} hover:text-blue-700`}
-                          >
-                            {pin.title}
-                          </button>
-                          <span title={normalizePinDevice(pin.device) === 'mobile' ? 'Mobile' : 'Desktop'}>
-                            {normalizePinDevice(pin.device) === 'mobile' ? (
-                              <Smartphone size={11} className="text-purple-500" />
-                            ) : (
-                              <Monitor size={11} className="text-slate-400" />
-                            )}
-                          </span>
-                          <span title={pinType === 'issue' ? 'Issue' : 'Comment'}>
-                            {pinType === 'issue' ? (
-                              <AlertCircle size={11} className="text-red-500" />
-                            ) : (
-                              <MessageSquare size={11} className="text-blue-500" />
-                            )}
-                          </span>
-                          {isIssueType && (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); handleOpenIssueModal(pin); }}
-                              className="ml-auto p-1 rounded-md text-indigo-600 hover:bg-indigo-50 hover:text-indigo-700 transition-colors flex-shrink-0"
-                              title="Open Issue Details"
-                            >
-                              <Maximize2 size={13} />
-                            </button>
-                          )}
-                        </div>
-                        <p className="text-slate-600 text-sm leading-relaxed line-clamp-2">{pin.description}</p>
-                      </div>
+            <div className="divide-y divide-slate-100 overflow-y-auto flex-1 min-h-0">
+              {!isImageLoaded ? (
+                <div className="p-4 space-y-3">
+                  {[1, 2].map(i => (
+                    <div key={i} className="p-3 bg-slate-50 animate-pulse rounded-lg space-y-2">
+                      <div className="h-4 bg-slate-200 rounded w-1/3"></div>
+                      <div className="h-3 bg-slate-200 rounded w-5/6"></div>
                     </div>
-                  </div>
-                );
-              })}
+                  ))}
+                </div>
+              ) : (
+                <>
+                  {visiblePins.length === 0 && (
+                    <div className="p-8 text-slate-400 text-center text-sm">No notes added for this screen.</div>
+                  )}
+                  {visiblePins.map(pin => {
+                    const pinType = pin.type || 'issue';
+                    const isIssueType = pinType === 'issue';
+                    return (
+                      <div
+                        key={pin.id}
+                        className={`p-5 transition-colors hover:bg-slate-50 ${activePinId === pin.id ? 'bg-blue-50 border-l-4 border-blue-500' : ''}`}
+                      >
+                        <div className="flex items-start gap-3">
+                          <button
+                            onClick={() => { setActivePinId(activePinId === pin.id ? null : pin.id); scrollPinIntoView(pin); }}
+                            className="flex-shrink-0 cursor-pointer"
+                          >
+                            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold mt-0.5 ${activePinId === pin.id ? 'bg-blue-600 text-white' : (pin.type && pin.type !== 'issue' ? 'bg-slate-500 text-white' : 'bg-slate-200 text-slate-600')}`}>
+                              {pin.number}
+                            </span>
+                          </button>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <button
+                                onClick={() => { setActivePinId(activePinId === pin.id ? null : pin.id); scrollPinIntoView(pin); }}
+                                className={`font-semibold mb-1 text-left ${activePinId === pin.id ? 'text-blue-900' : 'text-slate-800'} hover:text-blue-700`}
+                              >
+                                {pin.title}
+                              </button>
+                              <span title={normalizePinDevice(pin.device) === 'mobile' ? 'Mobile' : 'Desktop'}>
+                                {normalizePinDevice(pin.device) === 'mobile' ? (
+                                  <Smartphone size={11} className="text-purple-500" />
+                                ) : (
+                                  <Monitor size={11} className="text-slate-400" />
+                                )}
+                              </span>
+                              <span title={pinType === 'issue' ? 'Issue' : 'Comment'}>
+                                {pinType === 'issue' ? (
+                                  <AlertCircle size={11} className="text-red-500" />
+                                ) : (
+                                  <MessageSquare size={11} className="text-blue-500" />
+                                )}
+                              </span>
+                              {isIssueType && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); handleOpenIssueModal(pin); }}
+                                  className="ml-auto p-1 rounded-md text-indigo-600 hover:bg-indigo-50 hover:text-indigo-700 transition-colors flex-shrink-0"
+                                  title="Open Issue Details"
+                                >
+                                  <Maximize2 size={13} />
+                                </button>
+                              )}
+                            </div>
+                            <p className="text-slate-600 text-sm leading-relaxed whitespace-pre-wrap">{pin.description}</p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+            </div>
             </div>
           </div>
-        </div>
 
         {/* Right Column: Visuals */}
         <div className="lg:w-2/3 flex justify-center">
@@ -766,15 +827,23 @@ export const DeliveryView: React.FC<DeliveryViewProps> = ({ projectId, isLiveVie
             </div>
 
             <div ref={imageContainerRef} className="relative max-h-[80vh] overflow-y-auto">
+              {!isImageLoaded && (
+                <div className="w-full min-h-[75vh] bg-slate-100 animate-pulse flex flex-col items-center justify-center text-slate-400">
+                  <Loader2 size={32} className="animate-spin mb-3 text-blue-500" />
+                  <span className="text-xs font-medium text-slate-500">Loading screen preview...</span>
+                </div>
+              )}
               {activePage ? (
                 <div className="relative">
                   <img
+                    ref={handleDeliveryImageRef}
                     src={viewMode === 'mobile' ? ((activePage as any).mobileImageUrl || activePage.imageUrl) : activePage.imageUrl}
                     alt={activePage.name}
-                    className="w-full h-auto block"
+                    className={`w-full h-auto block transition-opacity duration-200 ${isImageLoaded ? 'opacity-100' : 'opacity-0 h-0 overflow-hidden'}`}
+                    onLoad={() => setIsImageLoaded(true)}
                   />
 
-                  {visiblePins.map(pin => (
+                  {isImageLoaded && visiblePins.map(pin => (
                     <button
                       key={pin.id}
                       data-pin-id={pin.id}
